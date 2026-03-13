@@ -2,16 +2,17 @@ import { useState, useEffect } from 'react'
 import Sidebar from './components/Sidebar.jsx'
 import ScanView from './components/ScanView.jsx'
 import DiveView from './components/DiveView.jsx'
+import TrendsView from './components/TrendsView.jsx'
 import { supabase, isMockMode } from './lib/supabase.js'
 import { CATEGORIES } from './lib/mockData.js'
 
 export default function App() {
-  const [view, setView]                       = useState('scan')
-  const [selectedArticle, setSelectedArticle] = useState(null)
+  const [view, setView]                         = useState('scan')
+  const [selectedArticle, setSelectedArticle]   = useState(null)
   const [selectedCategory, setSelectedCategory] = useState(null)
-  const [savedArticles, setSavedArticles]     = useState(new Set())
-  const [activeNav, setActiveNav]             = useState('briefing')
-  const [categories, setCategories]           = useState(CATEGORIES) // live categories from Supabase
+  const [savedArticles, setSavedArticles]       = useState(new Set())
+  const [activeNav, setActiveNav]               = useState('briefing')
+  const [categories, setCategories]             = useState(CATEGORIES)
 
   // Fetch live categories once on mount
   useEffect(() => {
@@ -37,12 +38,17 @@ export default function App() {
 
   function handleNavSelect(key) {
     setActiveNav(key)
-    setView('scan')
     setSelectedArticle(null)
-    if (key === 'briefing' || key === 'saved') {
-      setSelectedCategory(key === 'saved' ? 'saved' : null)
+    if (key === 'trends') {
+      setView('trends')
+      setSelectedCategory(null)
     } else {
-      setSelectedCategory(key)
+      setView('scan')
+      if (key === 'briefing' || key === 'saved') {
+        setSelectedCategory(key === 'saved' ? 'saved' : null)
+      } else {
+        setSelectedCategory(key)
+      }
     }
   }
 
@@ -70,8 +76,10 @@ export default function App() {
         savedCount={savedArticles.size}
       />
 
-      <main className={`flex-1 overflow-auto ${isMockMode ? 'mt-8' : ''}`}>
-        {view === 'scan' ? (
+      <main className={`flex-1 overflow-hidden ${isMockMode ? 'mt-8' : ''}`}>
+        {view === 'trends' ? (
+          <TrendsView categories={categories} />
+        ) : view === 'scan' ? (
           <ScanView
             categories={categories}
             selectedCategory={selectedCategory}

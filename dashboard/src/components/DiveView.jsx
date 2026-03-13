@@ -32,31 +32,35 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
       return
     }
 
-    // Live mode: fetch from Supabase
-    fetchLiveAnalysis(article.id, category?.name)
+    // Live mode: fetch from Supabase, or generate on-demand via Edge Function
+    fetchLiveAnalysis(article.id)
   }, [article?.id])
 
-  async function fetchLiveAnalysis(articleId, categoryName) {
+  async function fetchLiveAnalysis(articleId) {
     try {
-      const { data } = await supabase
-        .from('article_analyses')
-        .select('*')
-        .eq('article_id', articleId)
-        .single()
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-      if (data) {
-        setAnalysis({
-          key_points:           Array.isArray(data.key_points) ? data.key_points : JSON.parse(data.key_points || '[]'),
-          so_what:              data.so_what,
-          implications:         data.implications,
-          interest_connections: Array.isArray(data.interest_connections) ? data.interest_connections : JSON.parse(data.interest_connections || '[]'),
-        })
+      const res = await fetch(`${supabaseUrl}/functions/v1/generate-analysis`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${anonKey}`,
+        },
+        body: JSON.stringify({ articleId }),
+      })
+
+      const data = await res.json()
+
+      if (data.ok && data.analysis) {
+        setAnalysis(data.analysis)
       } else {
-        // No analysis yet — show placeholder (pipeline generates these on next run)
-        setAnalysis(buildPlaceholderAnalysis(categoryName))
+        console.error('generate-analysis failed:', data.error)
+        setAnalysis(null)
       }
-    } catch {
-      setAnalysis(buildPlaceholderAnalysis(categoryName))
+    } catch (err) {
+      console.error('fetchLiveAnalysis error:', err)
+      setAnalysis(null)
     } finally {
       setIsLoadingAnalysis(false)
     }
@@ -170,7 +174,11 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
             <AnalysisSkeleton />
           ) : analysis ? (
             <Analysis analysis={analysis} />
-          ) : null}
+          ) : (
+            <p className="text-sm text-gray-400 text-center py-8">
+              Analysis unavailable — check back shortly.
+            </p>
+          )}
         </div>
       </div>
 
@@ -255,7 +263,7 @@ function AnalysisSkeleton() {
           </div>
         </div>
       ))}
-      <p className="text-xs text-center text-gray-400 pt-2">Generating analysis…</p>
+      <p className="text-xs text-center text-gray-400 pt-2">Generating analysis with Claude…</p>
     </div>
   )
 }
