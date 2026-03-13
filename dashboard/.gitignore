@@ -1,0 +1,19 @@
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Vite temp files
+*.timestamp-*.mjs
+
+# Vercel
+.vercel
+
+# OS
+.DS_Store

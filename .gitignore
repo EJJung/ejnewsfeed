@@ -1,0 +1,22 @@
+# Environment / secrets
+.env
+*.env
+gmail_token.json
+
+# Python
+pipeline/__pycache__/
+pipeline/*.pyc
+*.pyc
+*.pyo
+__pycache__/
+
+# Node
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vercel
+
+# Vite temp files
+*.timestamp-*.mjs
+
+# OS
+.DS_Store
