@@ -186,6 +186,7 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         </div>
       )}
     </div>
+    </div>
   )
 }
 
@@ -255,7 +256,6 @@ function LoadingSkeleton() {
           ))}
         </div>
       ))}
-    </div>
     </div>
   )
 }
