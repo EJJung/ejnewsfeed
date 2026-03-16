@@ -7,10 +7,12 @@ import ArticleCard from './ArticleCard.jsx'
 const today = format(new Date(), 'EEEE, MMMM d, yyyy')
 
 export default function ScanView({ categories, selectedCategory, onArticleClick, savedArticles, onToggleSave }) {
-  const [summaries, setSummaries] = useState([])
-  const [articles, setArticles]   = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [summaryDate, setSummaryDate] = useState(null)
+  const [summaries, setSummaries]       = useState([])
+  const [articles, setArticles]         = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [refreshing, setRefreshing]     = useState(false)
+  const [summaryDate, setSummaryDate]   = useState(null)
+  const [lastFetched, setLastFetched]   = useState(null)
   const isSavedView = selectedCategory === 'saved'
 
   useEffect(() => {
@@ -23,8 +25,22 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
     fetchLiveData()
   }, [selectedCategory])
 
-  async function fetchLiveData() {
-    setLoading(true)
+  // Auto-refresh when tab regains focus, but no more than once every 5 minutes
+  useEffect(() => {
+    if (isMockMode) return
+    function handleFocus() {
+      const fiveMinutes = 5 * 60 * 1000
+      if (!lastFetched || Date.now() - lastFetched > fiveMinutes) {
+        fetchLiveData(true)
+      }
+    }
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [lastFetched, selectedCategory])
+
+  async function fetchLiveData(silent = false) {
+    if (silent) setRefreshing(true)
+    else setLoading(true)
     try {
       const sevenDaysAgo = subDays(new Date(), 7).toISOString()
 
@@ -66,13 +82,16 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
       }))
 
       setArticles(normalisedArticles)
+      setLastFetched(Date.now())
     } catch (err) {
       console.error('Failed to fetch live data:', err)
-      // Fallback to mock data so screen is never blank
-      setSummaries(TODAY_SUMMARIES)
-      setArticles(ARTICLES)
+      if (!silent) {
+        setSummaries(TODAY_SUMMARIES)
+        setArticles(ARTICLES)
+      }
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }
 
@@ -104,7 +123,23 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
             </svg>
             Morning Briefing
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900">{today}</h1>
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-semibold text-gray-900">{today}</h1>
+            <button
+              onClick={() => fetchLiveData(true)}
+              disabled={refreshing}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-40"
+              title="Refresh feed"
+            >
+              <svg
+                className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
           <p className="text-sm text-gray-500 mt-1">
             {visibleArticles.length} articles across {displayCategories.length} interest areas
             {summaryIsStale && (

@@ -10,11 +10,11 @@
 --
 -- SCHEDULE (adjust UTC times for your timezone):
 --   ET (UTC-5 winter / UTC-4 summer)
---   7:00 AM ET = 12:00 UTC (winter)  or 11:00 UTC (summer)
---   7:10 AM ET = 12:10 UTC (winter)  or 11:10 UTC (summer)
+--   10:00 AM EDT = 14:00 UTC (summer)
+--   10:10 AM EDT = 14:10 UTC (summer)
 --
---   The jobs below use 12:00 / 12:10 UTC (Eastern Standard Time).
---   In summer (EDT), update to 11:00 / 11:10 UTC.
+--   The jobs below use 14:00 / 14:10 UTC (Eastern Daylight Time).
+--   In winter (EST, UTC-5), update to 15:00 / 15:10 UTC.
 -- ============================================================
 
 -- ── Step 1: Enable extensions ─────────────────────────────────────────────
@@ -46,7 +46,7 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 SELECT cron.schedule(
   'fetch-emails-daily',        -- job name (unique)
-  '0 12 * * 1-5',              -- cron: 12:00 UTC Mon–Fri
+  '0 14 * * 1-5',              -- cron: 14:00 UTC = 10:00am EDT Mon–Fri
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
@@ -65,7 +65,7 @@ SELECT cron.schedule(
 
 SELECT cron.schedule(
   'process-emails-daily',      -- job name (unique)
-  '10 12 * * 1-5',             -- cron: 12:10 UTC Mon–Fri
+  '10 14 * * 1-5',             -- cron: 14:10 UTC = 10:10am EDT Mon–Fri
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
@@ -97,9 +97,9 @@ ORDER BY jobname;
 -- SELECT cron.unschedule('fetch-emails-daily');
 -- Then re-run the cron.schedule() call above with new timing.
 
--- ── Summer time adjustment (EDT = UTC-4) ──────────────────────────────────
--- When clocks spring forward, update both jobs to run an hour earlier:
+-- ── Winter time adjustment (EST = UTC-5) ──────────────────────────────────
+-- When clocks fall back (early Nov), update both jobs to run an hour later:
 --
 -- SELECT cron.unschedule('fetch-emails-daily');
 -- SELECT cron.unschedule('process-emails-daily');
--- Then re-run Step 3 & 4 above replacing '0 12' → '0 11' and '10 12' → '10 11'
+-- Then re-run Step 3 & 4 above replacing '0 14' → '0 15' and '10 14' → '10 15'
