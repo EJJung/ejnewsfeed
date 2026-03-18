@@ -40,17 +40,17 @@ Deno.serve(async (req) => {
 
     const authHeader = { Authorization: `Bearer ${accessToken}` }
 
-    // ── 2. List inbox messages from the last 2 days ───────────────────────
+    // ── 2. List inbox messages from the last 1 day ────────────────────────
     // Using newer_than instead of UNREAD so emails aren't missed if already
     // opened in Gmail. Deduplication is handled via gmail_message_id uniqueness.
     const listRes = await fetch(
-      `${GMAIL_BASE}/messages?q=in:inbox+newer_than:2d&maxResults=50`,
+      `${GMAIL_BASE}/messages?q=in:inbox+newer_than:1d&maxResults=50`,
       { headers: authHeader },
     )
     const listData = await listRes.json()
     const messages: { id: string }[] = listData.messages || []
 
-    console.log(`Found ${messages.length} inbox message(s) from last 2 days.`)
+    console.log(`Found ${messages.length} inbox message(s) from last 1 day.`)
 
     let savedCount = 0
     let skippedCount = 0
