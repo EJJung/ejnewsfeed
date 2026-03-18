@@ -1,8 +1,24 @@
 import { format } from 'date-fns'
+import { useNavigate, useLocation } from 'react-router-dom'
 
 const today = format(new Date(), 'EEEE, MMMM d')
 
-export default function Sidebar({ categories = [], activeNav, onNavSelect, savedCount }) {
+export default function Sidebar({ categories = [], savedCount }) {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  // Derive active nav key from current URL
+  const parts = location.pathname.split('/').filter(Boolean)
+  const activeNav = parts[0] === 'category' ? parts[1]
+    : parts[0] || 'briefing'
+
+  function handleNav(key) {
+    if (key === 'briefing') navigate('/briefing')
+    else if (key === 'saved') navigate('/saved')
+    else if (key === 'trends') navigate('/trends')
+    else navigate(`/category/${key}`)
+  }
+
   return (
     <aside className="w-60 bg-gray-900 text-gray-300 flex flex-col shrink-0 h-full">
       {/* Logo */}
@@ -26,7 +42,7 @@ export default function Sidebar({ categories = [], activeNav, onNavSelect, saved
         <NavItem
           label="Morning Briefing"
           isActive={activeNav === 'briefing'}
-          onClick={() => onNavSelect('briefing')}
+          onClick={() => handleNav('briefing')}
           icon={
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
@@ -38,13 +54,12 @@ export default function Sidebar({ categories = [], activeNav, onNavSelect, saved
           <span className="text-xs font-medium text-gray-600 uppercase tracking-wider">Categories</span>
         </div>
 
-        {/* Live categories from Supabase (passed from App) */}
         {categories.map(cat => (
           <NavItem
             key={cat.id}
             label={cat.name}
             isActive={activeNav === cat.id}
-            onClick={() => onNavSelect(cat.id)}
+            onClick={() => handleNav(cat.id)}
             dot={cat.color}
           />
         ))}
@@ -56,7 +71,7 @@ export default function Sidebar({ categories = [], activeNav, onNavSelect, saved
         <NavItem
           label="Trends"
           isActive={activeNav === 'trends'}
-          onClick={() => onNavSelect('trends')}
+          onClick={() => handleNav('trends')}
           icon={
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
@@ -67,7 +82,7 @@ export default function Sidebar({ categories = [], activeNav, onNavSelect, saved
         <NavItem
           label="Saved"
           isActive={activeNav === 'saved'}
-          onClick={() => onNavSelect('saved')}
+          onClick={() => handleNav('saved')}
           badge={savedCount > 0 ? savedCount : null}
           icon={
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>

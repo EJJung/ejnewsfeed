@@ -55,7 +55,8 @@ SELECT cron.schedule(
         'Content-Type',  'application/json',
         'Authorization', 'Bearer ' || (SELECT value FROM _pipeline_config WHERE key = 'supabase_anon_key')
       ),
-      body    := '{}'::jsonb
+      body    := '{}'::jsonb,
+      timeout_milliseconds := 30000
     );
   $$
 );
@@ -74,7 +75,8 @@ SELECT cron.schedule(
         'Content-Type',  'application/json',
         'Authorization', 'Bearer ' || (SELECT value FROM _pipeline_config WHERE key = 'supabase_anon_key')
       ),
-      body    := '{}'::jsonb
+      body    := '{}'::jsonb,
+      timeout_milliseconds := 30000
     );
   $$
 );
