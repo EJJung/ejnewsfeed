@@ -115,7 +115,7 @@ async function processAll(
     .select('id, subject, sender, source_id, received_at, raw_html, raw_text')
     .eq('processed', false)
     .order('received_at', { ascending: true })
-    .limit(30) // process up to 30 per run to stay within timeout
+    .limit(15) // process up to 15 per run — keeps Claude calls within time budget so summary generation always runs
 
   if (emailErr) throw new Error(`Failed to fetch raw_emails: ${emailErr.message}`)
 
