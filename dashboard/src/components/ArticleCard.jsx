@@ -42,8 +42,8 @@ export default function ArticleCard({ article, category, isSaved, onArticleClick
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Actions — always visible on mobile, hover-reveal on desktop */}
+        <div className="flex items-center gap-1 shrink-0 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
           {/* Save toggle */}
           <button
             onClick={(e) => { e.stopPropagation(); onToggleSave(article.id) }}

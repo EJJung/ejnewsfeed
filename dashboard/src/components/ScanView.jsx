@@ -153,7 +153,7 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
 
   return (
     <div className="h-full overflow-y-auto">
-    <div className="max-w-3xl mx-auto px-6 py-8">
+    <div className="max-w-3xl mx-auto px-4 py-5 md:px-6 md:py-8">
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
       {!isSavedView ? (
@@ -167,7 +167,7 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
               : 'Morning Briefing'}
           </div>
           <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-semibold text-gray-900">{todayLabel}</h1>
+            <h1 className="text-xl md:text-2xl font-semibold text-gray-900">{todayLabel}</h1>
             <button
               onClick={() => fetchLiveData(true)}
               disabled={refreshing}
@@ -365,7 +365,7 @@ function PastNewsSection({ pastByDate, pastDates, categories, onArticleClick, sa
 
 function LoadingSkeleton() {
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8 animate-pulse">
+    <div className="max-w-3xl mx-auto px-4 py-5 md:px-6 md:py-8 animate-pulse">
       <div className="mb-8">
         <div className="h-3 bg-gray-100 rounded w-32 mb-2" />
         <div className="h-7 bg-gray-200 rounded w-72 mb-2" />

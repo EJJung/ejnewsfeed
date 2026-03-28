@@ -10,6 +10,7 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
   const [note, setNote] = useState('')
   const [noteSaving, setNoteSaving] = useState(false)
   const [noteSaved, setNoteSaved] = useState(false)
+  const [showChat, setShowChat] = useState(false)
 
   // Category: use embedded join data from live articles, or look up from mock list
   const category = article?.category
@@ -119,10 +120,10 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
   if (!article) return null
 
   return (
-    <div className="flex h-full">
+    <div className="flex flex-col md:flex-row h-full relative">
       {/* Left: Article + Analysis (scrollable) */}
-      <div className="flex-1 overflow-y-auto border-r border-gray-100">
-        <div className="max-w-2xl mx-auto px-8 py-8">
+      <div className="flex-1 overflow-y-auto md:border-r border-gray-100">
+        <div className="max-w-2xl mx-auto px-4 py-5 md:px-8 md:py-8">
           {/* Back nav */}
           <button
             onClick={onBack}
@@ -147,7 +148,7 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
               {article.title}
             </h1>
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-2 text-xs text-gray-400">
                 {article.source && <span>{article.source}</span>}
                 {timeAgo && (
@@ -237,9 +238,37 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
         </div>
       </div>
 
-      {/* Right: Chat panel */}
-      <div className="w-[360px] shrink-0 flex flex-col bg-white">
-        <ChatPanel article={article} />
+      {/* Mobile chat toggle button */}
+      <button
+        onClick={() => setShowChat(!showChat)}
+        className="md:hidden fixed bottom-4 right-4 z-30 bg-gray-900 text-white rounded-full p-3 shadow-lg hover:bg-gray-800 transition-colors"
+      >
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          {showChat
+            ? <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            : <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          }
+        </svg>
+      </button>
+
+      {/* Right: Chat panel — overlay on mobile, fixed column on desktop */}
+      <div className={`
+        fixed inset-0 z-20 bg-white flex flex-col
+        md:relative md:inset-auto md:w-[360px] md:shrink-0 md:z-auto
+        ${showChat ? 'flex' : 'hidden md:flex'}
+      `}>
+        {/* Mobile chat header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 md:hidden">
+          <span className="text-sm font-medium text-gray-700">Ask about this article</span>
+          <button onClick={() => setShowChat(false)} className="p-1 rounded-md text-gray-400 hover:text-gray-600">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <ChatPanel article={article} />
+        </div>
       </div>
     </div>
   )
