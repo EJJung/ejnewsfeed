@@ -40,17 +40,21 @@ Deno.serve(async (req) => {
 
     const authHeader = { Authorization: `Bearer ${accessToken}` }
 
-    // ── 2. List inbox messages from the last 1 day ────────────────────────
-    // Using newer_than instead of UNREAD so emails aren't missed if already
-    // opened in Gmail. Deduplication is handled via gmail_message_id uniqueness.
+    // ── 2. List inbox messages with a day-aware window ────────────────────
+    // Monday uses 4d to catch emails that arrived over the weekend (Sat/Sun).
+    // Other weekdays use 2d as a buffer in case yesterday's run was missed.
+    // Deduplication via gmail_message_id uniqueness prevents re-saving emails
+    // that were already fetched in a previous run.
+    const dayOfWeek = new Date().getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+    const daysBack = dayOfWeek === 1 ? 4 : 2
     const listRes = await fetch(
-      `${GMAIL_BASE}/messages?q=in:inbox+newer_than:1d&maxResults=50`,
+      `${GMAIL_BASE}/messages?q=in:inbox+newer_than:${daysBack}d&maxResults=50`,
       { headers: authHeader },
     )
     const listData = await listRes.json()
     const messages: { id: string }[] = listData.messages || []
 
-    console.log(`Found ${messages.length} inbox message(s) from last 1 day.`)
+    console.log(`Found ${messages.length} inbox message(s) (window: ${daysBack}d, day: ${dayOfWeek}).`)
 
     let savedCount = 0
     let skippedCount = 0

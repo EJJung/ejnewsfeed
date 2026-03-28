@@ -7,9 +7,11 @@ import TrendsView from './components/TrendsView.jsx'
 import { supabase, isMockMode } from './lib/supabase.js'
 import { CATEGORIES } from './lib/mockData.js'
 
+const LS_KEY = 'ej_saved_article_ids'
+
 export default function App() {
-  const [savedArticles, setSavedArticles]   = useState(new Set())
-  const [categories, setCategories]         = useState(CATEGORIES)
+  const [savedArticles, setSavedArticles] = useState(new Set())
+  const [categories, setCategories]       = useState(CATEGORIES)
   const navigate = useNavigate()
 
   // Fetch live categories once on mount
@@ -24,17 +26,47 @@ export default function App() {
       })
   }, [])
 
-  function handleArticleClick(article) {
-    navigate(`/article/${article.id}`, { state: { article } })
+  // Load saved articles — localStorage first (instant), then sync from Supabase
+  useEffect(() => {
+    const stored = JSON.parse(localStorage.getItem(LS_KEY) || '[]')
+    if (stored.length) setSavedArticles(new Set(stored))
+
+    if (isMockMode) return
+
+    supabase
+      .from('saved_articles')
+      .select('article_id')
+      .then(({ data }) => {
+        if (data) {
+          const ids = new Set(data.map(r => r.article_id))
+          setSavedArticles(ids)
+          localStorage.setItem(LS_KEY, JSON.stringify([...ids]))
+        }
+      })
+  }, [])
+
+  async function handleToggleSave(articleId) {
+    const isSaving = !savedArticles.has(articleId)
+    const next = new Set(savedArticles)
+    if (isSaving) next.add(articleId)
+    else next.delete(articleId)
+
+    // Update UI and localStorage immediately
+    setSavedArticles(next)
+    localStorage.setItem(LS_KEY, JSON.stringify([...next]))
+
+    // Persist to Supabase in background
+    if (!isMockMode) {
+      if (isSaving) {
+        await supabase.from('saved_articles').insert({ article_id: articleId })
+      } else {
+        await supabase.from('saved_articles').delete().eq('article_id', articleId)
+      }
+    }
   }
 
-  function handleToggleSave(articleId) {
-    setSavedArticles(prev => {
-      const next = new Set(prev)
-      if (next.has(articleId)) next.delete(articleId)
-      else next.add(articleId)
-      return next
-    })
+  function handleArticleClick(article) {
+    navigate(`/article/${article.id}`, { state: { article } })
   }
 
   const scanProps = { categories, onArticleClick: handleArticleClick, savedArticles, onToggleSave: handleToggleSave }
@@ -64,13 +96,11 @@ export default function App() {
   )
 }
 
-// Pulls categoryId from the URL and passes it to ScanView
 function CategoryRoute(scanProps) {
   const { categoryId } = useParams()
   return <ScanView {...scanProps} selectedCategory={categoryId} />
 }
 
-// Loads the article from router state (fast) or fetches from Supabase (direct URL access)
 function ArticleRoute({ savedArticles, onToggleSave }) {
   const { articleId } = useParams()
   const location = useLocation()

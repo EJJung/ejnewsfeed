@@ -115,7 +115,7 @@ async function processAll(
     .select('id, subject, sender, source_id, received_at, raw_html, raw_text')
     .eq('processed', false)
     .order('received_at', { ascending: true })
-    .limit(30) // process up to 30 per run to stay within timeout
+    .limit(15) // process up to 15 per run — keeps Claude calls within time budget so summary generation always runs
 
   if (emailErr) throw new Error(`Failed to fetch raw_emails: ${emailErr.message}`)
 
@@ -124,6 +124,12 @@ async function processAll(
 
   let totalArticlesSaved = 0
   const processedEmailIds: string[] = []
+
+  // Track all unique published dates encountered during this run.
+  // On Tue–Fri these drive the per-day summary calls.
+  // On Monday the rollup uses a fixed Sat→Mon range regardless, but we still
+  // track weekday dates here so missed backlog summaries can be generated.
+  const affectedDates = new Set<string>()
 
   // 3. Process each email
   for (const email of rawEmails) {
@@ -156,6 +162,9 @@ async function processAll(
       // Save each article
       for (const article of extracted) {
         const catId = resolveCategoryId(categoryList, article.category)
+        // Sanitise the extracted published_at: reject future dates and implausible historical
+        // dates that are often event/webinar dates mentioned inside the newsletter body.
+        const publishedAt = sanitisePublishedAt(article.published_at, email.received_at)
 
         const { error: insertErr } = await supabase.from('articles').insert({
           raw_email_id:        email.id,
@@ -166,13 +175,14 @@ async function processAll(
           primary_category_id: catId,
           category_tags:       [article.category],
           relevance_score:     article.relevance_score,
-          published_at:        article.published_at || email.received_at,
+          published_at:        publishedAt,
         })
 
         if (insertErr) {
           console.error(`  ✗ Failed to save article "${article.title}": ${insertErr.message}`)
         } else {
           totalArticlesSaved++
+          affectedDates.add(publishedAt.slice(0, 10))
         }
       }
 
@@ -189,21 +199,72 @@ async function processAll(
     }
   }
 
-  // 4. Generate daily summaries for today
-  const today = new Date().toISOString().slice(0, 10)
-  const summaryCount = await generateDailySummaries(
-    supabase,
-    anthropicKey,
-    categoryList,
-    today,
-  )
+  // 4. Generate summaries using day-aware date ranges.
+  //
+  //   Monday      → one rollup covering Saturday + Sunday + Monday.
+  //                 Stored under Monday's date so it appears in today's briefing.
+  //   Tuesday–Friday → daily summary per affected date.
+  //
+  // affectedDates always includes today plus any published_at dates from newly
+  // saved articles, so backlog processing still generates correct summaries.
+  const todayDate = new Date()
+  const todayISO = todayDate.toISOString().slice(0, 10)
+  const dayOfWeek = todayDate.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+
+  // Auto-detect backlog: find any date in the past 7 days that has articles
+  // but no summary yet. This self-heals gaps caused by duplicate-insert failures
+  // (e.g. emails reset to processed=false and re-run) or any other edge case.
+  const sevenDaysAgo = new Date(todayDate.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const [{ data: existingSummaries }, { data: recentArticleDates }] = await Promise.all([
+    supabase.from('daily_summaries').select('date').gte('date', sevenDaysAgo),
+    supabase.from('articles').select('published_at').gte('published_at', `${sevenDaysAgo}T00:00:00Z`),
+  ])
+  const summaryDateSet = new Set((existingSummaries || []).map((s: { date: string }) => s.date))
+  for (const row of (recentArticleDates || [])) {
+    const d = (row as { published_at: string }).published_at?.slice(0, 10)
+    if (d && !summaryDateSet.has(d)) {
+      console.log(`  📋 Backlog gap detected: ${d} has articles but no summary — adding to queue`)
+      affectedDates.add(d)
+    }
+  }
+
+  let summaryCount = 0
+
+  if (dayOfWeek === 1) {
+    // Monday: generate a single Sat + Sun + Mon rollup stored under today's date.
+    const satISO = new Date(todayDate.getTime() - 2 * 24 * 60 * 60 * 1000)
+      .toISOString().slice(0, 10)
+    console.log(`Monday — generating weekend rollup: ${satISO} → ${todayISO}`)
+    summaryCount += await generateDailySummaries(
+      supabase, anthropicKey, categoryList, satISO, todayISO,
+    )
+    // Also catch any backlog weekday dates (Tue–Fri) that got new articles today.
+    for (const date of affectedDates) {
+      const dow = new Date(date + 'T12:00:00Z').getDay()
+      if (dow >= 2 && dow <= 5 && date !== todayISO) {
+        summaryCount += await generateDailySummaries(
+          supabase, anthropicKey, categoryList, date, date,
+        )
+      }
+    }
+  } else {
+    // Tuesday–Friday: one daily summary per affected date, always including today
+    // so the summary is generated even when no new emails arrived this run.
+    const datesToSummarise = new Set([...affectedDates, todayISO])
+    console.log(`Generating summaries for dates: ${[...datesToSummarise].join(', ')}`)
+    for (const date of datesToSummarise) {
+      summaryCount += await generateDailySummaries(
+        supabase, anthropicKey, categoryList, date, date,
+      )
+    }
+  }
 
   const result = {
     ok: true,
     emails_processed: processedEmailIds.length,
     articles_saved: totalArticlesSaved,
     summaries_generated: summaryCount,
-    date: today,
+    date: todayISO,
   }
   console.log('process-emails complete:', result)
   return result
@@ -280,22 +341,32 @@ Respond ONLY with the JSON array, no markdown, no explanation.`
 
 // ── Daily summary generation ───────────────────────────────────────────────
 
+/**
+ * Generate (or regenerate) daily summaries for a date range.
+ *
+ * For normal weekdays (Tue–Fri): startDate === endDate (single day).
+ * For Monday rollups:            startDate = Saturday, endDate = Monday.
+ *   - Articles from the entire Sat–Mon window are included.
+ *   - The summary row is stored under endDate (Monday) so it surfaces in
+ *     today's briefing.
+ */
 async function generateDailySummaries(
   supabase: ReturnType<typeof createClient>,
   anthropicKey: string,
   categories: Category[],
-  date: string,
+  startDate: string,  // beginning of article window (inclusive)
+  endDate: string,    // end of article window and storage date (inclusive)
 ): Promise<number> {
+  const isWeekendRollup = startDate !== endDate
   let summaryCount = 0
 
   for (const category of categories) {
-    // Fetch today's articles for this category
     const { data: articles } = await supabase
       .from('articles')
       .select('title, snippet, url')
       .eq('primary_category_id', category.id)
-      .gte('created_at', `${date}T00:00:00.000Z`)
-      .lte('created_at', `${date}T23:59:59.999Z`)
+      .gte('published_at', `${startDate}T00:00:00.000Z`)
+      .lte('published_at', `${endDate}T23:59:59.999Z`)
       .order('relevance_score', { ascending: false })
       .limit(20)
 
@@ -310,14 +381,15 @@ async function generateDailySummaries(
       category.name,
       bulletList,
       articles.length,
+      isWeekendRollup,
     )
 
-    // Upsert so re-running updates the summary
+    // Upsert under endDate so the summary appears on the correct day.
     const { error } = await supabase
       .from('daily_summaries')
       .upsert(
         {
-          date,
+          date:          endDate,
           category_id:   category.id,
           summary:       summaryText,
           article_count: articles.length,
@@ -330,7 +402,7 @@ async function generateDailySummaries(
       console.error(`  ✗ Failed to save summary for ${category.name}: ${error.message}`)
     } else {
       summaryCount++
-      console.log(`  ✓ Summary for ${category.name}: ${articles.length} articles`)
+      console.log(`  ✓ Summary [${startDate}→${endDate}] ${category.name}: ${articles.length} articles`)
     }
   }
 
@@ -342,12 +414,15 @@ async function generateCategorySummary(
   categoryName: string,
   bulletList: string,
   articleCount: number,
+  isWeekendRollup = false,
 ): Promise<string> {
+  const period = isWeekendRollup ? 'this weekend and Monday' : 'today'
+  const label  = isWeekendRollup ? 'Weekend + Monday' : "Today's"
   const prompt = `You are a senior analyst writing a morning briefing for a busy professional.
 
-Summarize today's ${categoryName} news in 2–3 sentences. Be specific, insightful, and highlight the most important themes or developments.
+Summarize ${period}'s ${categoryName} news in 2–3 sentences. Be specific, insightful, and highlight the most important themes or developments.
 
-Today's ${categoryName} articles (${articleCount} total):
+${label} ${categoryName} articles (${articleCount} total):
 ${bulletList}
 
 Write a concise synthesis paragraph — no bullet points, no headers, just flowing prose. Aim for 60–100 words.`
@@ -383,4 +458,40 @@ function resolveCategoryId(categories: Category[], name: string): string {
   const lower = name.toLowerCase()
   const match = categories.find((c) => c.name.toLowerCase() === lower)
   return match?.id ?? categories[0].id
+}
+
+/**
+ * Validate and sanitise an article's extracted published_at date.
+ *
+ * Claude sometimes extracts dates that appear *inside* the newsletter body
+ * (e.g. "join our webinar on March 26") rather than the email's actual delivery
+ * date. This function rejects those implausible values and falls back to the
+ * email's received_at timestamp, which is always reliable.
+ *
+ * Rejects if:
+ *  - extracted is null / unparseable
+ *  - extracted is more than 1 day in the future relative to received_at
+ *    (catches forward-referenced event / webinar dates)
+ *  - extracted is more than 30 days before received_at
+ *    (catches deep historical references unlikely to be the real publish date)
+ */
+function sanitisePublishedAt(extracted: string | null, emailReceivedAt: string): string {
+  if (!extracted) return emailReceivedAt
+  try {
+    const d = new Date(extracted)
+    if (isNaN(d.getTime())) return emailReceivedAt
+    const received = new Date(emailReceivedAt)
+    const oneDayMs = 24 * 60 * 60 * 1000
+    if (d.getTime() > received.getTime() + oneDayMs) {
+      console.log(`  ⚠ published_at ${extracted} is future-dated vs received ${emailReceivedAt} — using received_at`)
+      return emailReceivedAt
+    }
+    if (d.getTime() < received.getTime() - 30 * oneDayMs) {
+      console.log(`  ⚠ published_at ${extracted} is >30d before received — using received_at`)
+      return emailReceivedAt
+    }
+    return d.toISOString()
+  } catch {
+    return emailReceivedAt
+  }
 }
