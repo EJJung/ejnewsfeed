@@ -7,6 +7,9 @@ import ChatPanel from './ChatPanel.jsx'
 export default function DiveView({ article, onBack, savedArticles, onToggleSave }) {
   const [analysis, setAnalysis] = useState(null)
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(true)
+  const [note, setNote] = useState('')
+  const [noteSaving, setNoteSaving] = useState(false)
+  const [noteSaved, setNoteSaved] = useState(false)
 
   // Category: use embedded join data from live articles, or look up from mock list
   const category = article?.category
@@ -16,6 +19,36 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
   const timeAgo = article?.published_at
     ? formatDistanceToNow(new Date(article.published_at), { addSuffix: true })
     : null
+
+  // Load existing note whenever a saved article is opened
+  useEffect(() => {
+    setNote('')
+    setNoteSaved(false)
+    if (!isSaved || isMockMode || !article?.id) return
+    supabase
+      .from('saved_articles')
+      .select('notes')
+      .eq('article_id', article.id)
+      .maybeSingle()
+      .then(({ data }) => { if (data?.notes) setNote(data.notes) })
+  }, [article?.id, isSaved])
+
+  async function handleNoteBlur() {
+    if (!isSaved || isMockMode) return
+    setNoteSaving(true)
+    const { error } = await supabase
+      .from('saved_articles')
+      .update({ notes: note })
+      .eq('article_id', article.id)
+    setNoteSaving(false)
+    if (error) {
+      console.error('Failed to save note:', error)
+      setNoteSaved(false)
+    } else {
+      setNoteSaved(true)
+      setTimeout(() => setNoteSaved(false), 2000)
+    }
+  }
 
   useEffect(() => {
     if (!article) return
@@ -178,6 +211,28 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
             <p className="text-sm text-gray-400 text-center py-8">
               Analysis unavailable — check back shortly.
             </p>
+          )}
+
+          {/* My Notes — only visible when article is saved */}
+          {isSaved && (
+            <div className="mt-8 pb-8">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="h-px flex-1 bg-gray-100" />
+                <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">My Notes</span>
+                <div className="h-px flex-1 bg-gray-100" />
+              </div>
+              <textarea
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                onBlur={handleNoteBlur}
+                placeholder="Add your personal notes on this article…"
+                rows={4}
+                className="w-full text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-300 placeholder-gray-400 leading-relaxed"
+              />
+              <div className="text-right mt-1.5 text-xs text-gray-400 h-4">
+                {noteSaving ? 'Saving…' : noteSaved ? '✓ Saved' : ''}
+              </div>
+            </div>
           )}
         </div>
       </div>

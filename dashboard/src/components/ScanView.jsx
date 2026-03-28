@@ -93,15 +93,17 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         .order('created_at', { ascending: false })
 
       if (isBriefing) {
-        // Morning Briefing: today's articles only
+        // Morning Briefing: articles published today only (by email date, not
+        // insertion time). Weekend emails processed on Monday have published_at
+        // = Saturday/Sunday, so they won't inflate Monday's briefing.
         articleQuery = articleQuery
-          .gte('created_at', `${todayISO}T00:00:00Z`)
-          .lte('created_at', `${todayISO}T23:59:59.999Z`)
+          .gte('published_at', `${todayISO}T00:00:00Z`)
+          .lte('published_at', `${todayISO}T23:59:59.999Z`)
           .limit(200)
       } else {
         // Category view: last 7 days for that category
         articleQuery = articleQuery
-          .gte('created_at', subDays(new Date(), 7).toISOString())
+          .gte('published_at', subDays(new Date(), 7).toISOString())
           .eq('primary_category_id', selectedCategory)
           .limit(200)
       }
@@ -121,18 +123,20 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
     }
   }
 
-  // Split articles into today vs past (only matters for category view)
+  // Split articles into today vs past using published_at (email send date),
+  // not created_at. Weekend emails processed on Monday get published_at =
+  // Saturday, so they correctly land in Past News, not today's section.
   const todayArticles = isCategoryView
-    ? articles.filter(a => (a.created_at || '').startsWith(todayISO))
+    ? articles.filter(a => (a.published_at || '').startsWith(todayISO))
     : articles
 
   const pastArticles = isCategoryView
-    ? articles.filter(a => !(a.created_at || '').startsWith(todayISO))
+    ? articles.filter(a => !(a.published_at || '').startsWith(todayISO))
     : []
 
-  // Group past articles by date
+  // Group past articles by their published date
   const pastByDate = pastArticles.reduce((acc, a) => {
-    const d = (a.created_at || '').slice(0, 10)
+    const d = (a.published_at || '').slice(0, 10)
     if (!acc[d]) acc[d] = []
     acc[d].push(a)
     return acc
