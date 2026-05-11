@@ -37,6 +37,7 @@ export async function fetchArticles(categoryId = null, limit = 50) {
   let query = supabase
     .from('articles')
     .select('*, source:sources(name), category:categories(name,color)')
+    .order('impact_score', { ascending: false, nullsFirst: false })
     .order('published_at', { ascending: false })
     .limit(limit)
   if (categoryId) query = query.eq('primary_category_id', categoryId)

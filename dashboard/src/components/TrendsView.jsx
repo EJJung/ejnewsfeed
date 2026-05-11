@@ -45,29 +45,31 @@ export default function TrendsView({ categories = [] }) {
   const selectedCategory = categories.find(c => c.id === categoryId)
 
   return (
-    <div className="flex h-full">
-      {/* Category picker — left panel */}
-      <div className="w-48 shrink-0 border-r border-gray-100 py-6 px-3 space-y-0.5">
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wider px-2 mb-3">Category</p>
-        {categories.map(cat => (
-          <button
-            key={cat.id}
-            onClick={() => setCategoryId(cat.id)}
-            className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors text-left ${
-              categoryId === cat.id
-                ? 'bg-gray-100 text-gray-900 font-medium'
-                : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
-            }`}
-          >
-            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
-            {cat.name}
-          </button>
-        ))}
+    <div className="flex flex-col md:flex-row h-full">
+      {/* Category picker — horizontal scroll on mobile, left panel on desktop */}
+      <div className="md:w-48 shrink-0 md:border-r border-b md:border-b-0 border-gray-100 md:py-6 md:px-3 md:space-y-0.5">
+        <p className="hidden md:block text-xs font-medium text-gray-400 uppercase tracking-wider px-2 mb-3">Category</p>
+        <div className="flex md:flex-col gap-1 px-3 py-2 md:p-0 overflow-x-auto">
+          {categories.map(cat => (
+            <button
+              key={cat.id}
+              onClick={() => setCategoryId(cat.id)}
+              className={`flex items-center gap-2 px-3 py-1.5 md:px-2.5 md:py-2 rounded-md md:rounded-md text-sm transition-colors text-left whitespace-nowrap md:w-full ${
+                categoryId === cat.id
+                  ? 'bg-gray-100 text-gray-900 font-medium'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: cat.color }} />
+              {cat.name}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Main content */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-8 py-8">
+        <div className="max-w-2xl mx-auto px-4 py-5 md:px-8 md:py-8">
 
           {/* Header */}
           <div className="mb-6">

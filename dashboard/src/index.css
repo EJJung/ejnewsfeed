@@ -12,6 +12,10 @@ body {
   background-color: #F9FAFB;
 }
 
+/* Mobile content area — accounts for mobile header */
+.mobile-content { height: calc(100vh - 49px); }
+@media (min-width: 768px) { .mobile-content { height: 100%; } }
+
 /* Custom scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
