@@ -87,10 +87,13 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
       setSummaries(latestSummaries)
 
       // ── Fetch articles ───────────────────────────────────────────────────
+      // Order by impact_score first so high-impact items rise to the top
+      // within each day, then by published_at as a freshness tiebreaker.
       let articleQuery = supabase
         .from('articles')
         .select('*, source:sources(name), category:categories(id, name, color)')
-        .order('created_at', { ascending: false })
+        .order('impact_score', { ascending: false, nullsFirst: false })
+        .order('published_at', { ascending: false })
 
       if (isBriefing) {
         // Morning Briefing: articles published today only (by email date, not

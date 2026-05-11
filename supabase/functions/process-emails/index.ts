@@ -47,8 +47,136 @@ interface ExtractedArticle {
   url: string | null
   snippet: string
   category: string
+  category_tags: string[]
   relevance_score: number
+  signal_keywords_score: number
   published_at: string | null
+}
+
+interface ScoredArticle extends ExtractedArticle {
+  _source_id: string | null
+  _impact_score: number
+}
+
+// ── Impact scoring ─────────────────────────────────────────────────────────
+
+// Signal weights — must sum to 1.0
+const WEIGHTS = {
+  source_authority:    0.25,
+  story_reach:         0.20,
+  signal_keywords:     0.20,
+  cross_category:      0.15,
+  personal_engagement: 0.20,
+} as const
+
+const TIER_SCORES: Record<string, number> = { A: 1.0, B: 0.6, C: 0.3 }
+
+const TITLE_STOPWORDS = new Set([
+  'a', 'an', 'the', 'and', 'or', 'in', 'of', 'to', 'is', 'it',
+  'for', 'on', 'at', 'by', 'with', 'how', 'why', 'what', 'this',
+  'that', 'are', 'has', 'have', 'was', 'will', 'its', 'be', 'as',
+  'from', 'but', 'not', 'new', 'your',
+])
+
+async function getSourceAuthorityScore(
+  supabase: ReturnType<typeof createClient>,
+  sourceId: string | null,
+  cache: Map<string, string>,
+): Promise<number> {
+  if (!sourceId) return TIER_SCORES.C
+  if (!cache.has(sourceId)) {
+    const { data } = await supabase
+      .from('sources')
+      .select('tier')
+      .eq('id', sourceId)
+      .maybeSingle()
+    cache.set(sourceId, (data as { tier?: string } | null)?.tier || 'C')
+  }
+  return TIER_SCORES[cache.get(sourceId)!] ?? TIER_SCORES.C
+}
+
+function titleKeywords(title: string): Set<string> {
+  const words = (title.toLowerCase().match(/\b[a-z]{4,}\b/g) || [])
+  return new Set(words.filter((w) => !TITLE_STOPWORDS.has(w)))
+}
+
+/**
+ * For each article, count how many distinct sources cover an overlapping
+ * story (2+ significant title keywords in common). Reach mapping:
+ *   1 source → 0.2, 2 sources → 0.6, 3+ sources → 1.0
+ */
+function computeStoryReachScores(articles: ScoredArticle[]): number[] {
+  const kwSets = articles.map((a) => titleKeywords(a.title || ''))
+  const reach: number[] = []
+
+  for (let i = 0; i < articles.length; i++) {
+    if (kwSets[i].size === 0) {
+      reach.push(0.2)
+      continue
+    }
+    const matching = new Set<string>([articles[i]._source_id || `_self_${i}`])
+    for (let j = 0; j < articles.length; j++) {
+      if (i === j) continue
+      let overlap = 0
+      for (const w of kwSets[i]) {
+        if (kwSets[j].has(w)) {
+          overlap++
+          if (overlap >= 2) break
+        }
+      }
+      if (overlap >= 2) matching.add(articles[j]._source_id || `_other_${j}`)
+    }
+    const n = matching.size
+    reach.push(n >= 3 ? 1.0 : n === 2 ? 0.6 : 0.2)
+  }
+  return reach
+}
+
+/**
+ * Returns 0.1–1.0 based on EJ's historical high-signal actions
+ * (read_full, saved, chat_started) for articles from this source.
+ * Defaults to 0.5 until at least 10 interactions exist.
+ */
+async function getPersonalEngagementScore(
+  supabase: ReturnType<typeof createClient>,
+  sourceId: string | null,
+): Promise<number> {
+  if (!sourceId) return 0.5
+  try {
+    const { data } = await supabase
+      .from('user_interactions')
+      .select('action, article:articles!inner(source_id)')
+      .eq('article.source_id', sourceId)
+    const interactions = (data || []) as Array<{ action: string }>
+    if (interactions.length < 10) return 0.5
+    const highSignal = interactions.filter((i) =>
+      i.action === 'read_full' || i.action === 'saved' || i.action === 'chat_started',
+    ).length
+    const ratio = Math.min(Math.max(highSignal / interactions.length, 0.1), 1.0)
+    return Math.round(ratio * 1000) / 1000
+  } catch {
+    return 0.5
+  }
+}
+
+function computeImpactScore(params: {
+  signalKeywords: number
+  sourceAuthority: number
+  reach: number
+  personal: number
+  categoryTags: string[]
+}): number {
+  const { signalKeywords, sourceAuthority, reach, personal, categoryTags } = params
+  const crossCat = categoryTags.length > 0
+    ? Math.min((categoryTags.length - 1) / 2.0, 1.0)
+    : 0.0
+  const raw =
+    WEIGHTS.source_authority    * sourceAuthority +
+    WEIGHTS.story_reach         * reach +
+    WEIGHTS.signal_keywords     * signalKeywords +
+    WEIGHTS.cross_category      * crossCat +
+    WEIGHTS.personal_engagement * personal
+  return Math.round(Math.min(Math.max(raw, 0.0), 1.0) * 1000) / 1000
 }
 
 // ── Main handler ───────────────────────────────────────────────────────────
@@ -131,7 +259,10 @@ async function processAll(
   // track weekday dates here so missed backlog summaries can be generated.
   const affectedDates = new Set<string>()
 
-  // 3. Process each email
+  // ── Phase 1: Extract articles from every email ──────────────────────────
+  // Collect everything before computing reach scores (which need the full set).
+  const extractionResults: Array<{ articles: ScoredArticle[]; email: RawEmail }> = []
+
   for (const email of rawEmails) {
     try {
       const bodyText = email.raw_html
@@ -144,7 +275,6 @@ async function processAll(
         continue
       }
 
-      // Extract articles via Claude
       const extracted = await extractArticles(
         anthropicKey,
         email.subject,
@@ -159,12 +289,68 @@ async function processAll(
         continue
       }
 
-      // Save each article
-      for (const article of extracted) {
+      const scored: ScoredArticle[] = extracted.map((a) => ({
+        ...a,
+        _source_id: email.source_id,
+        _impact_score: 0.5,
+      }))
+      extractionResults.push({ articles: scored, email })
+      console.log(
+        `  → Extracted ${extracted.length} from: ${email.subject?.slice(0, 50)}`,
+      )
+    } catch (err) {
+      console.error(`  ✗ Error extracting email ${email.id}: ${err}`)
+    }
+  }
+
+  // ── Phase 2: Compute impact scores ──────────────────────────────────────
+  const allArticles: ScoredArticle[] = extractionResults.flatMap((r) => r.articles)
+
+  if (allArticles.length > 0) {
+    console.log(`Scoring impact for ${allArticles.length} article(s)…`)
+    const tierCache = new Map<string, string>()
+    const reachScores = computeStoryReachScores(allArticles)
+
+    // Memoize personal-engagement lookups by source_id within this run.
+    const personalCache = new Map<string, number>()
+    const getPersonal = async (sid: string | null): Promise<number> => {
+      const key = sid || '__null__'
+      if (!personalCache.has(key)) {
+        personalCache.set(key, await getPersonalEngagementScore(supabase, sid))
+      }
+      return personalCache.get(key)!
+    }
+
+    for (let i = 0; i < allArticles.length; i++) {
+      const art = allArticles[i]
+      const authority = await getSourceAuthorityScore(supabase, art._source_id, tierCache)
+      const personal  = await getPersonal(art._source_id)
+      const keyword   = Number.isFinite(art.signal_keywords_score)
+        ? Math.min(Math.max(art.signal_keywords_score, 0), 1)
+        : 0.5
+      const tags = (art.category_tags && art.category_tags.length)
+        ? art.category_tags
+        : (art.category ? [art.category] : [])
+
+      art._impact_score = computeImpactScore({
+        signalKeywords: keyword,
+        sourceAuthority: authority,
+        reach: reachScores[i],
+        personal,
+        categoryTags: tags,
+      })
+    }
+  }
+
+  // ── Phase 3: Save articles and mark emails processed ───────────────────
+  for (const { articles, email } of extractionResults) {
+    try {
+      for (const article of articles) {
         const catId = resolveCategoryId(categoryList, article.category)
-        // Sanitise the extracted published_at: reject future dates and implausible historical
-        // dates that are often event/webinar dates mentioned inside the newsletter body.
         const publishedAt = sanitisePublishedAt(article.published_at, email.received_at)
+        const tags = (article.category_tags && article.category_tags.length)
+          ? article.category_tags
+          : [article.category]
 
         const { error: insertErr } = await supabase.from('articles').insert({
           raw_email_id:        email.id,
@@ -173,8 +359,9 @@ async function processAll(
           url:                 article.url || null,
           snippet:             article.snippet,
           primary_category_id: catId,
-          category_tags:       [article.category],
+          category_tags:       tags,
           relevance_score:     article.relevance_score,
+          impact_score:        article._impact_score,
           published_at:        publishedAt,
         })
 
@@ -186,16 +373,12 @@ async function processAll(
         }
       }
 
-      // Mark email processed
       await supabase.from('raw_emails').update({ processed: true }).eq('id', email.id)
       processedEmailIds.push(email.id)
-
-      console.log(
-        `  ✓ Processed: ${email.subject?.slice(0, 50)} — ${extracted.length} article(s)`,
-      )
+      console.log(`  ✓ Saved ${articles.length} from: ${email.subject?.slice(0, 50)}`)
     } catch (err) {
       // Leave processed=false so it will retry next run
-      console.error(`  ✗ Error processing email ${email.id}: ${err}`)
+      console.error(`  ✗ Error saving email ${email.id}: ${err}`)
     }
   }
 
@@ -297,8 +480,14 @@ Each article object must have these exact fields:
 - title: string — clear, concise headline
 - url: string | null — the article URL if present, otherwise null
 - snippet: string — 1–3 sentence summary of the article
-- category: string — must be exactly one of the available categories
+- category: string — the single best-fit category, must be exactly one of the available categories
+- category_tags: string[] — all relevant categories (1–3 items, each one of the available categories)
 - relevance_score: number — float from 0.0 to 1.0 indicating relevance to the category
+- signal_keywords_score: number — 0.0 to 1.0, objective newsworthiness of the event itself.
+    Score 0.8–1.0: major funding round / acquisition / IPO, significant product launch by a major player,
+                   important regulation or policy change, notable research breakthrough, large-scale layoffs.
+    Score 0.4–0.7: meaningful but not landmark — mid-stage startup news, useful tool releases, industry trends.
+    Score 0.0–0.3: opinion pieces, predictions, how-to guides, roundups, listicles.
 - published_at: string | null — ISO date string if mentioned, otherwise null
 
 Respond ONLY with the JSON array, no markdown, no explanation.`
@@ -367,6 +556,7 @@ async function generateDailySummaries(
       .eq('primary_category_id', category.id)
       .gte('published_at', `${startDate}T00:00:00.000Z`)
       .lte('published_at', `${endDate}T23:59:59.999Z`)
+      .order('impact_score', { ascending: false, nullsFirst: false })
       .order('relevance_score', { ascending: false })
       .limit(20)
 
