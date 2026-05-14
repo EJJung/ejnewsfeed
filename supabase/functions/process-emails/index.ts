@@ -352,24 +352,28 @@ async function processAll(
           ? article.category_tags
           : [article.category]
 
-        const { error: insertErr } = await supabase.from('articles').insert({
-          raw_email_id:        email.id,
-          source_id:           email.source_id,
-          title:               article.title,
-          url:                 article.url || null,
-          snippet:             article.snippet,
-          primary_category_id: catId,
-          category_tags:       tags,
-          relevance_score:     article.relevance_score,
-          impact_score:        article._impact_score,
-          published_at:        publishedAt,
-        })
+        try {
+          const { error: insertErr } = await supabase.from('articles').insert({
+            raw_email_id:        email.id,
+            source_id:           email.source_id,
+            title:               article.title,
+            url:                 article.url || null,
+            snippet:             article.snippet,
+            primary_category_id: catId,
+            category_tags:       tags,
+            relevance_score:     article.relevance_score,
+            impact_score:        article._impact_score,
+            published_at:        publishedAt,
+          })
 
-        if (insertErr) {
-          console.error(`  ✗ Failed to save article "${article.title}": ${insertErr.message}`)
-        } else {
-          totalArticlesSaved++
-          affectedDates.add(publishedAt.slice(0, 10))
+          if (insertErr) {
+            console.error(`  ✗ Article insert failed for "${article.title}":`, JSON.stringify(insertErr))
+          } else {
+            totalArticlesSaved++
+            affectedDates.add(publishedAt.slice(0, 10))
+          }
+        } catch (e) {
+          console.error(`  ✗ Article insert exception for "${article.title}":`, (e as Error).message)
         }
       }
 
@@ -433,12 +437,46 @@ async function processAll(
   } else {
     // Tuesday–Friday: one daily summary per affected date, always including today
     // so the summary is generated even when no new emails arrived this run.
+    //
+    // Backfill handling: on days where newsletters were processed but their
+    // articles carry older published_at dates (e.g. pipeline was down for a
+    // few days and today's newsletters cover last week's news), today will have
+    // no articles and the summary would be skipped. Instead, we generate a
+    // today-dated summary sourced from the most recently available content date
+    // so the dashboard always shows a fresh entry rather than a stale one.
     const datesToSummarise = new Set([...affectedDates, todayISO])
     console.log(`Generating summaries for dates: ${[...datesToSummarise].join(', ')}`)
     for (const date of datesToSummarise) {
-      summaryCount += await generateDailySummaries(
-        supabase, anthropicKey, categoryList, date, date,
-      )
+      if (date === todayISO && affectedDates.size > 0) {
+        // Check if today actually has articles before deciding how to source the summary.
+        const { data: todayCheck } = await supabase
+          .from('articles')
+          .select('id')
+          .gte('published_at', `${todayISO}T00:00:00Z`)
+          .lte('published_at', `${todayISO}T23:59:59Z`)
+          .limit(1)
+        if (todayCheck?.length) {
+          // Normal case: articles published today exist, summarise today only.
+          summaryCount += await generateDailySummaries(
+            supabase, anthropicKey, categoryList, todayISO, todayISO,
+          )
+        } else {
+          // Backfill case: use the most recently affected content date as the
+          // article source window but store the summary under today's date so
+          // the dashboard surfaces it as "today's briefing".
+          const mostRecentContentDate = [...affectedDates].filter(d => d < todayISO).sort().pop()
+          if (mostRecentContentDate) {
+            console.log(`  📋 Backfill: no articles for ${todayISO} — sourcing today's summary from ${mostRecentContentDate}`)
+            summaryCount += await generateDailySummaries(
+              supabase, anthropicKey, categoryList, mostRecentContentDate, todayISO,
+            )
+          }
+        }
+      } else {
+        summaryCount += await generateDailySummaries(
+          supabase, anthropicKey, categoryList, date, date,
+        )
+      }
     }
   }
 

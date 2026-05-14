@@ -96,12 +96,16 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         .order('published_at', { ascending: false })
 
       if (isBriefing) {
-        // Morning Briefing: articles published today only (by email date, not
-        // insertion time). Weekend emails processed on Monday have published_at
-        // = Saturday/Sunday, so they won't inflate Monday's briefing.
+        // Morning Briefing: show articles for the same date the summaries cover.
+        // On normal days this is today. On backfill days (e.g. pipeline was down
+        // and newsletters were processed late), summaries are generated for today
+        // but sourced from the most recent available content date — so we use
+        // mostRecentDate here to keep articles and summaries in sync.
+        // Falls back to todayISO if no summaries exist yet.
+        const articleFilterDate = mostRecentDate || todayISO
         articleQuery = articleQuery
-          .gte('published_at', `${todayISO}T00:00:00Z`)
-          .lte('published_at', `${todayISO}T23:59:59.999Z`)
+          .gte('published_at', `${articleFilterDate}T00:00:00Z`)
+          .lte('published_at', `${articleFilterDate}T23:59:59.999Z`)
           .limit(200)
       } else {
         // Category view: last 7 days for that category
