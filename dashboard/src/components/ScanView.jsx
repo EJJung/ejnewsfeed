@@ -96,13 +96,21 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         .order('published_at', { ascending: false })
 
       if (isBriefing) {
-        // Morning Briefing: show articles for the same date the summaries cover.
+        // Morning Briefing: show articles from the most recently published date.
         // On normal days this is today. On backfill days (e.g. pipeline was down
-        // and newsletters were processed late), summaries are generated for today
-        // but sourced from the most recent available content date — so we use
-        // mostRecentDate here to keep articles and summaries in sync.
-        // Falls back to todayISO if no summaries exist yet.
-        const articleFilterDate = mostRecentDate || todayISO
+        // and newsletters were processed late), summaries may be dated today but
+        // articles have an earlier published_at — so we query the actual latest
+        // article date rather than hard-coding today, keeping the feed in sync
+        // with whatever content the summaries are covering.
+        let articleFilterDate = todayISO
+        const { data: latestArticleRow } = await supabase
+          .from('articles')
+          .select('published_at')
+          .order('published_at', { ascending: false })
+          .limit(1)
+        if (latestArticleRow?.[0]?.published_at) {
+          articleFilterDate = latestArticleRow[0].published_at.slice(0, 10)
+        }
         articleQuery = articleQuery
           .gte('published_at', `${articleFilterDate}T00:00:00Z`)
           .lte('published_at', `${articleFilterDate}T23:59:59.999Z`)
