@@ -243,7 +243,7 @@ async function processAll(
     .select('id, subject, sender, source_id, received_at, raw_html, raw_text')
     .eq('processed', false)
     .order('received_at', { ascending: true })
-    .limit(15) // process up to 15 per run — keeps Claude calls within time budget so summary generation always runs
+    .limit(2) // process up to 2 per run — 5 was hitting the 150s EdgeRuntime timeout before articles could be saved
 
   if (emailErr) throw new Error(`Failed to fetch raw_emails: ${emailErr.message}`)
 
@@ -444,10 +444,10 @@ async function processAll(
     // no articles and the summary would be skipped. Instead, we generate a
     // today-dated summary sourced from the most recently available content date
     // so the dashboard always shows a fresh entry rather than a stale one.
-    const datesToSummarise = new Set([...affectedDates, todayISO])
+    const datesToSummarise = new Set([todayISO, ...affectedDates])
     console.log(`Generating summaries for dates: ${[...datesToSummarise].join(', ')}`)
     for (const date of datesToSummarise) {
-      if (date === todayISO && affectedDates.size > 0) {
+      if (date === todayISO) {
         // Check if today actually has articles before deciding how to source the summary.
         const { data: todayCheck } = await supabase
           .from('articles')
@@ -461,10 +461,18 @@ async function processAll(
             supabase, anthropicKey, categoryList, todayISO, todayISO,
           )
         } else {
-          // Backfill case: use the most recently affected content date as the
-          // article source window but store the summary under today's date so
-          // the dashboard surfaces it as "today's briefing".
-          const mostRecentContentDate = [...affectedDates].filter(d => d < todayISO).sort().pop()
+          // Backfill case: no articles published today (pipeline processed older
+          // newsletters, or no new emails this run). Use the most recently
+          // available content date — first from affectedDates, then from the DB.
+          let mostRecentContentDate = [...affectedDates].filter(d => d < todayISO).sort().pop()
+          if (!mostRecentContentDate) {
+            const { data: latestRow } = await supabase
+              .from('articles')
+              .select('published_at')
+              .order('published_at', { ascending: false })
+              .limit(1)
+            mostRecentContentDate = latestRow?.[0]?.published_at?.slice(0, 10)
+          }
           if (mostRecentContentDate) {
             console.log(`  📋 Backfill: no articles for ${todayISO} — sourcing today's summary from ${mostRecentContentDate}`)
             summaryCount += await generateDailySummaries(

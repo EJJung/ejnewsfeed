@@ -45,16 +45,35 @@ Deno.serve(async (req) => {
     // Other weekdays use 2d as a buffer in case yesterday's run was missed.
     // Deduplication via gmail_message_id uniqueness prevents re-saving emails
     // that were already fetched in a previous run.
+    //
+    // Optional POST body overrides:
+    //   daysBack  — integer, overrides the day-of-week window
+    //   query     — string, fully overrides the Gmail q= parameter
+    //               e.g. "in:inbox after:2026/05/12 before:2026/05/14"
+    //   maxResults — integer (1–500), overrides the default 50
+    let bodyDaysBack: number | null = null
+    let bodyQuery: string | null = null
+    let bodyMaxResults: number | null = null
+    try {
+      const body = await req.json()
+      if (typeof body?.daysBack === 'number' && body.daysBack > 0) bodyDaysBack = body.daysBack
+      if (typeof body?.query === 'string' && body.query.trim()) bodyQuery = body.query.trim()
+      if (typeof body?.maxResults === 'number' && body.maxResults > 0) bodyMaxResults = Math.min(body.maxResults, 500)
+    } catch { /* empty body or non-JSON — ignore */ }
+
     const dayOfWeek = new Date().getDay() // 0=Sun, 1=Mon, ..., 6=Sat
-    const daysBack = dayOfWeek === 1 ? 4 : 2
+    const daysBack = bodyDaysBack ?? (dayOfWeek === 1 ? 4 : 2)
+    const maxResults = bodyMaxResults ?? 50
+    const gmailQuery = bodyQuery ?? `in:inbox+newer_than:${daysBack}d`
+
     const listRes = await fetch(
-      `${GMAIL_BASE}/messages?q=in:inbox+newer_than:${daysBack}d&maxResults=50`,
+      `${GMAIL_BASE}/messages?q=${encodeURIComponent(gmailQuery)}&maxResults=${maxResults}`,
       { headers: authHeader },
     )
     const listData = await listRes.json()
     const messages: { id: string }[] = listData.messages || []
 
-    console.log(`Found ${messages.length} inbox message(s) (window: ${daysBack}d, day: ${dayOfWeek}).`)
+    console.log(`Found ${messages.length} inbox message(s) (query: "${gmailQuery}", maxResults: ${maxResults}).`)
 
     let savedCount = 0
     let skippedCount = 0
