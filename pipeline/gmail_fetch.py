@@ -45,16 +45,16 @@ def get_gmail_service():
         else:
             # Build a minimal client config dict from env vars
             client_config = {
-                "installed": {
+                "web": {
                     "client_id": CLIENT_ID,
                     "client_secret": CLIENT_SECRET,
-                    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob", "http://localhost"],
+                    "redirect_uris": ["http://localhost:8080/"],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                 }
             }
             flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(port=8080)
 
         with open(TOKEN_PATH, 'w') as f:
             f.write(creds.to_json())
