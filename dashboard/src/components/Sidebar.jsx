@@ -1,5 +1,5 @@
 import { format } from 'date-fns'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 
 const today = format(new Date(), 'EEEE, MMMM d')
 
@@ -100,10 +100,15 @@ export default function Sidebar({ categories = [], savedCount, onClose }) {
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-gray-800">
+      <div className="px-5 py-4 border-t border-gray-800 space-y-3">
         <div className="flex items-center gap-2 text-xs text-gray-600">
           <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white font-semibold text-xs">E</div>
           <span>ej.newsfeed@gmail.com</span>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-gray-600">
+          <Link to="/privacy" className="hover:text-gray-400 transition-colors">Privacy Policy</Link>
+          <span className="text-gray-700">·</span>
+          <Link to="/terms" className="hover:text-gray-400 transition-colors">Terms</Link>
         </div>
       </div>
     </aside>

@@ -6,6 +6,8 @@ import DiveView from './components/DiveView.jsx'
 import TrendsView from './components/TrendsView.jsx'
 import { supabase, isMockMode } from './lib/supabase.js'
 import { CATEGORIES } from './lib/mockData.js'
+import PrivacyPage from './components/PrivacyPage.jsx'
+import TermsPage from './components/TermsPage.jsx'
 
 const LS_KEY = 'ej_saved_article_ids'
 
@@ -129,6 +131,8 @@ export default function App() {
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
             <Route path="/trends" element={<TrendsView categories={categories} />} />
             <Route path="/article/:articleId" element={<ArticleRoute savedArticles={savedArticles} onToggleSave={handleToggleSave} />} />
+            <Route path="/privacy" element={<PrivacyPage />} />
+            <Route path="/terms" element={<TermsPage />} />
             <Route path="*" element={<Navigate to="/briefing" replace />} />
           </Routes>
         </div>

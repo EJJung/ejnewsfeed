@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.ejjung.newsfeed-audit</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ejjung/Dev/ejnewsfeed/pipeline/run_audit_local.sh</string>
+    </array>
+
+    <!-- Run at 08:00 AM Monday–Friday -->
+    <!-- launchd weekday: 1=Monday, 2=Tuesday, 3=Wednesday, 4=Thursday, 5=Friday -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ejjung/Dev/ejnewsfeed/logs/launchd-audit.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ejjung/Dev/ejnewsfeed/logs/launchd-audit.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>
