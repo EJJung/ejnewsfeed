@@ -23,6 +23,29 @@ const CORS = {
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages'
 const CLAUDE_MODEL = 'claude-sonnet-4-6'
 
+// ── Alert helper ───────────────────────────────────────────────────────────
+async function sendAlert(supabase: ReturnType<typeof createClient>, message: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('_pipeline_config')
+      .select('value')
+      .eq('key', 'alert_webhook_url')
+      .maybeSingle()
+    const url = (data as { value?: string } | null)?.value?.trim()
+    if (!url) return
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: '🚨 EJ Newsfeed Pipeline Error',
+        message,
+        job: 'process-emails',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+  } catch { /* best-effort */ }
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface Category {
@@ -191,8 +214,16 @@ Deno.serve(async (req) => {
 
   const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')!
 
+  // ── Open a pipeline_runs record ──────────────────────────────────────────
+  const { data: runRow } = await supabase
+    .from('pipeline_runs')
+    .insert({ job_name: 'process-emails', status: 'running' })
+    .select('id')
+    .single()
+  const runId: string | null = (runRow as { id: string } | null)?.id ?? null
+
   // Kick off background work and return immediately
-  const work = processAll(supabase, anthropicKey)
+  const work = processAll(supabase, anthropicKey, runId)
 
   // @ts-ignore — Deno Deploy global
   if (typeof EdgeRuntime !== 'undefined') {
@@ -224,14 +255,25 @@ Deno.serve(async (req) => {
 async function processAll(
   supabase: ReturnType<typeof createClient>,
   anthropicKey: string,
+  runId: string | null,
 ) {
+  const finishRun = async (patch: Record<string, unknown>) => {
+    if (!runId) return
+    await supabase
+      .from('pipeline_runs')
+      .update({ completed_at: new Date().toISOString(), ...patch })
+      .eq('id', runId)
+  }
   // 1. Load all categories (we'll need them for ID lookup)
   const { data: categories, error: catErr } = await supabase
     .from('categories')
     .select('id, name, description, color')
 
   if (catErr || !categories?.length) {
-    throw new Error(`Failed to load categories: ${catErr?.message ?? 'empty'}`)
+    const msg = `Failed to load categories: ${catErr?.message ?? 'empty'}`
+    await finishRun({ status: 'error', error_message: msg })
+    await sendAlert(supabase, msg)
+    throw new Error(msg)
   }
 
   const categoryList = categories as Category[]
@@ -245,7 +287,12 @@ async function processAll(
     .order('received_at', { ascending: true })
     .limit(2) // process up to 2 per run — 5 was hitting the 150s EdgeRuntime timeout before articles could be saved
 
-  if (emailErr) throw new Error(`Failed to fetch raw_emails: ${emailErr.message}`)
+  if (emailErr) {
+    const msg = `Failed to fetch raw_emails: ${emailErr.message}`
+    await finishRun({ status: 'error', error_message: msg })
+    await sendAlert(supabase, msg)
+    throw new Error(msg)
+  }
 
   const rawEmails = (emails || []) as RawEmail[]
   console.log(`Processing ${rawEmails.length} unprocessed email(s).`)
@@ -496,6 +543,29 @@ async function processAll(
     date: todayISO,
   }
   console.log('process-emails complete:', result)
+
+  // Determine status: partial if emails queued but none processed this run
+  const status = totalArticlesSaved === 0 && processedEmailIds.length === 0
+    ? 'partial'
+    : 'success'
+
+  await finishRun({
+    status,
+    emails_processed: processedEmailIds.length,
+    articles_saved: totalArticlesSaved,
+    summaries_generated: summaryCount,
+    metadata: { date: todayISO },
+  })
+
+  // Alert if Claude produced no articles and there were emails to process
+  if (status === 'partial') {
+    await sendAlert(
+      supabase,
+      `process-emails ran but saved 0 articles on ${todayISO}. ` +
+      `Check Edge Function logs — Claude API may be rate-limited or emails had no extractable content.`,
+    )
+  }
+
   return result
 }
 

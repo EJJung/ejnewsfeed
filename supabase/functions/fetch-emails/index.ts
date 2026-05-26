@@ -22,21 +22,76 @@ const CORS = {
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
+// ── Alert helper ───────────────────────────────────────────────────────────
+// Posts a JSON payload to the configured alert_webhook_url (if set).
+// Best-effort: never throws, never blocks the main flow.
+async function sendAlert(supabase: ReturnType<typeof createClient>, message: string): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from('_pipeline_config')
+      .select('value')
+      .eq('key', 'alert_webhook_url')
+      .maybeSingle()
+    const url = (data as { value?: string } | null)?.value?.trim()
+    if (!url) return
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: '🚨 EJ Newsfeed Pipeline Error',
+        message,
+        job: 'fetch-emails',
+        timestamp: new Date().toISOString(),
+      }),
+    })
+  } catch { /* best-effort — never block the main response */ }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
-  try {
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    )
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
 
-    // ── 1. Get fresh Gmail access token ───────────────────────────────────
-    const accessToken = await getAccessToken(
-      Deno.env.get('GMAIL_CLIENT_ID')!,
-      Deno.env.get('GMAIL_CLIENT_SECRET')!,
-      Deno.env.get('GMAIL_REFRESH_TOKEN')!,
-    )
+  // ── Open a pipeline_runs record ────────────────────────────────────────
+  const { data: runRow } = await supabase
+    .from('pipeline_runs')
+    .insert({ job_name: 'fetch-emails', status: 'running' })
+    .select('id')
+    .single()
+  const runId: string | null = (runRow as { id: string } | null)?.id ?? null
+
+  const finishRun = async (patch: Record<string, unknown>) => {
+    if (!runId) return
+    await supabase
+      .from('pipeline_runs')
+      .update({ completed_at: new Date().toISOString(), ...patch })
+      .eq('id', runId)
+  }
+
+  try {
+    // ── 1. Get fresh Gmail access token ─────────────────────────────────
+    let accessToken: string
+    try {
+      accessToken = await getAccessToken(
+        Deno.env.get('GMAIL_CLIENT_ID')!,
+        Deno.env.get('GMAIL_CLIENT_SECRET')!,
+        Deno.env.get('GMAIL_REFRESH_TOKEN')!,
+      )
+    } catch (tokenErr) {
+      const msg = `Gmail OAuth token refresh failed: ${String(tokenErr)}. ` +
+        `Check GMAIL_REFRESH_TOKEN in Supabase Edge Function secrets — ` +
+        `it may have been revoked and needs to be regenerated.`
+      console.error(msg)
+      await finishRun({ status: 'error', error_message: msg })
+      await sendAlert(supabase, msg)
+      return new Response(JSON.stringify({ ok: false, error: msg }), {
+        status: 500,
+        headers: { ...CORS, 'Content-Type': 'application/json' },
+      })
+    }
 
     const authHeader = { Authorization: `Bearer ${accessToken}` }
 
@@ -150,12 +205,22 @@ Deno.serve(async (req) => {
     const result = { ok: true, saved: savedCount, skipped: skippedCount, total: messages.length }
     console.log('fetch-emails complete:', result)
 
+    await finishRun({
+      status: 'success',
+      emails_fetched: savedCount,
+      emails_skipped: skippedCount,
+      metadata: { total_inbox: messages.length, query: gmailQuery },
+    })
+
     return new Response(JSON.stringify(result), {
       headers: { ...CORS, 'Content-Type': 'application/json' },
     })
   } catch (err) {
+    const errMsg = String(err)
     console.error('fetch-emails error:', err)
-    return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+    await finishRun({ status: 'error', error_message: errMsg })
+    await sendAlert(supabase, `Unexpected fetch-emails error: ${errMsg}`)
+    return new Response(JSON.stringify({ ok: false, error: errMsg }), {
       status: 500,
       headers: { ...CORS, 'Content-Type': 'application/json' },
     })
