@@ -27,8 +27,8 @@ SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 SUPABASE_URL  = os.environ['SUPABASE_URL']
 SUPABASE_KEY  = os.environ['SUPABASE_SERVICE_ROLE_KEY']
 TOKEN_PATH    = os.environ.get('GMAIL_TOKEN_PATH', './gmail_token.json')
-CLIENT_ID     = os.environ['GMAIL_CLIENT_ID']
-CLIENT_SECRET = os.environ['GMAIL_CLIENT_SECRET']
+CLIENT_ID     = os.environ.get('GMAIL_LOCAL_CLIENT_ID') or os.environ['GMAIL_CLIENT_ID']
+CLIENT_SECRET = os.environ.get('GMAIL_LOCAL_CLIENT_SECRET') or os.environ['GMAIL_CLIENT_SECRET']
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ def get_gmail_service():
         else:
             # Build a minimal client config dict from env vars
             client_config = {
-                "web": {
+                "installed": {
                     "client_id": CLIENT_ID,
                     "client_secret": CLIENT_SECRET,
                     "redirect_uris": ["http://localhost:8080/"],

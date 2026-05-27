@@ -6,6 +6,12 @@ This guide walks you through deploying the Edge Functions and wiring up all requ
 
 ## Step 1 — Extract your Gmail refresh token
 
+> **Two OAuth clients are in use:**
+> - **Web application client** (`GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` in `.env`) → used here for Supabase secrets
+> - **Desktop app client** (`GMAIL_LOCAL_CLIENT_ID` / `GMAIL_LOCAL_CLIENT_SECRET` in `.env`) → used only by `gmail_fetch.py --auth` locally
+>
+> Use the **Web application** credentials in this step, not the Desktop app ones.
+
 Your refresh token lives in `pipeline/gmail_token.json`. Run this in your terminal:
 
 ```bash
@@ -17,8 +23,8 @@ Look for the `"refresh_token"` field. It starts with `1//01...` and is a long st
 Copy it — you'll need it in Step 3.
 
 Also open `pipeline/.env` and note:
-- `GMAIL_CLIENT_ID`
-- `GMAIL_CLIENT_SECRET`
+- `GMAIL_CLIENT_ID` (Web application client — use this one)
+- `GMAIL_CLIENT_SECRET` (Web application client — use this one)
 - `ANTHROPIC_API_KEY`
 
 ---
