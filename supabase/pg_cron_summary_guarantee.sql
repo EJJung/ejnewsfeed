@@ -17,7 +17,7 @@
 
 SELECT cron.schedule(
   'process-emails-summary-guarantee',   -- job name (unique)
-  '35 14 * * 1-5',                      -- cron: 14:35 UTC = 10:35am EDT Mon–Fri
+  '35 14 * * *',                      -- cron: 14:35 UTC = 10:35am EDT Mon–Fri
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')

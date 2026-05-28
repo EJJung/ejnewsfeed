@@ -8,6 +8,7 @@ import { supabase, isMockMode } from './lib/supabase.js'
 import { CATEGORIES } from './lib/mockData.js'
 import PrivacyPage from './components/PrivacyPage.jsx'
 import TermsPage from './components/TermsPage.jsx'
+import AdminView from './components/AdminView.jsx'
 
 const LS_KEY = 'ej_saved_article_ids'
 
@@ -133,6 +134,7 @@ export default function App() {
             <Route path="/article/:articleId" element={<ArticleRoute savedArticles={savedArticles} onToggleSave={handleToggleSave} />} />
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />
+            <Route path="/admin" element={<AdminView />} />
             <Route path="*" element={<Navigate to="/briefing" replace />} />
           </Routes>
         </div>

@@ -14,6 +14,7 @@
 --   10:10 AM EDT = 14:10 UTC (summer)
 --
 --   The jobs below use 14:00 / 14:10 UTC (Eastern Daylight Time).
+--   Runs every day (including weekends) — newsletters arrive 7 days a week.
 --   In winter (EST, UTC-5), update to 15:00 / 15:10 UTC.
 -- ============================================================
 
@@ -42,11 +43,11 @@ VALUES
   ('supabase_anon_key', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9xeHhtZHl5ZmpnaWdmanRwb3N2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMwMTIxOTksImV4cCI6MjA4ODU4ODE5OX0.oTrh2F2s6WHUBPaJ57wWtrDxbNH2C36RMXkvf2cwfCA')
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
--- ── Step 3: Schedule fetch-emails (7:00 AM ET = 12:00 UTC, Mon–Fri) ───────
+-- ── Step 3: Schedule fetch-emails (10:00 AM EDT = 14:00 UTC, daily) ─────────
 
 SELECT cron.schedule(
   'fetch-emails-daily',        -- job name (unique)
-  '0 14 * * 1-5',              -- cron: 14:00 UTC = 10:00am EDT Mon–Fri
+  '0 14 * * *',                -- cron: 14:00 UTC = 10:00am EDT every day
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
@@ -61,12 +62,12 @@ SELECT cron.schedule(
   $$
 );
 
--- ── Step 4: Schedule process-emails (7:10 AM ET = 12:10 UTC, Mon–Fri) ─────
+-- ── Step 4: Schedule process-emails (10:10 AM EDT = 14:10 UTC, daily) ───────
 -- 10-minute gap gives fetch-emails time to finish before processing starts
 
 SELECT cron.schedule(
   'process-emails-daily',      -- job name (unique)
-  '10 14 * * 1-5',             -- cron: 14:10 UTC = 10:10am EDT Mon–Fri
+  '10 14 * * *',               -- cron: 14:10 UTC = 10:10am EDT every day
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
@@ -104,4 +105,5 @@ ORDER BY jobname;
 --
 -- SELECT cron.unschedule('fetch-emails-daily');
 -- SELECT cron.unschedule('process-emails-daily');
--- Then re-run Step 3 & 4 above replacing '0 14' → '0 15' and '10 14' → '10 15'
+-- Then re-run Step 3 & 4 above replacing '0 14 * * *' → '0 15 * * *'
+--                                     and '10 14 * * *' → '10 15 * * *'

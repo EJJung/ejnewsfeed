@@ -5,7 +5,7 @@
  * and categorize them, saves to articles table, then generates
  * daily_summaries per category.
  *
- * Triggered by pg_cron at 7:10am UTC Mon–Fri (10 minutes after fetch-emails).
+ * Triggered by pg_cron at 14:10 UTC daily (10 minutes after fetch-emails).
  * Can also be invoked manually via HTTP POST.
  *
  * Uses EdgeRuntime.waitUntil() so the HTTP response returns quickly
@@ -279,12 +279,23 @@ async function processAll(
   const categoryList = categories as Category[]
   const categoryNames = categoryList.map((c) => c.name)
 
-  // 2. Fetch unprocessed emails
+  // Compute today's date once — used for email scoping and summary generation
+  const todayDate = new Date()
+  const todayISO  = todayDate.toISOString().slice(0, 10)
+
+  // 2. Fetch unprocessed emails received today (UTC 00:00–23:59)
+  // Scoping to today ensures we never process stale backlog emails from previous
+  // days and keeps each invocation's workload predictable (only today's newsletters).
+  const todayStart = `${todayISO}T00:00:00.000Z`
+  const todayEnd   = `${todayISO}T23:59:59.999Z`
+
   const { data: emails, error: emailErr } = await supabase
     .from('raw_emails')
     .select('id, subject, sender, source_id, received_at, raw_html, raw_text')
     .eq('processed', false)
-    .order('received_at', { ascending: true })
+    .gte('received_at', todayStart)
+    .lte('received_at', todayEnd)
+    .order('received_at', { ascending: true }) // oldest-first within today so earlier newsletters are processed first
     .limit(2) // process up to 2 per run — 5 was hitting the 150s EdgeRuntime timeout before articles could be saved
 
   if (emailErr) {
@@ -301,9 +312,7 @@ async function processAll(
   const processedEmailIds: string[] = []
 
   // Track all unique published dates encountered during this run.
-  // On Tue–Fri these drive the per-day summary calls.
-  // On Monday the rollup uses a fixed Sat→Mon range regardless, but we still
-  // track weekday dates here so missed backlog summaries can be generated.
+  // Used to detect and backfill any recent dates that have articles but no summary.
   const affectedDates = new Set<string>()
 
   // ── Phase 1: Extract articles from every email ──────────────────────────
@@ -433,21 +442,14 @@ async function processAll(
     }
   }
 
-  // 4. Generate summaries using day-aware date ranges.
+  // 4. Generate daily summaries for today.
   //
-  //   Monday      → one rollup covering Saturday + Sunday + Monday.
-  //                 Stored under Monday's date so it appears in today's briefing.
-  //   Tuesday–Friday → daily summary per affected date.
+  // The pipeline now runs every day, so we always generate a single daily
+  // summary for today. No Monday weekend-rollup needed — each day stands alone.
   //
-  // affectedDates always includes today plus any published_at dates from newly
-  // saved articles, so backlog processing still generates correct summaries.
-  const todayDate = new Date()
-  const todayISO = todayDate.toISOString().slice(0, 10)
-  const dayOfWeek = todayDate.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
-
-  // Auto-detect backlog: find any date in the past 7 days that has articles
-  // but no summary yet. This self-heals gaps caused by duplicate-insert failures
-  // (e.g. emails reset to processed=false and re-run) or any other edge case.
+  // Gap self-heal: also check the past 7 days for any date that has articles
+  // but no summary (caused by a failed run or EdgeRuntime timeout) and backfill
+  // those too while we have the budget.
   const sevenDaysAgo = new Date(todayDate.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const [{ data: existingSummaries }, { data: recentArticleDates }] = await Promise.all([
     supabase.from('daily_summaries').select('date').gte('date', sevenDaysAgo),
@@ -457,82 +459,22 @@ async function processAll(
   for (const row of (recentArticleDates || [])) {
     const d = (row as { published_at: string }).published_at?.slice(0, 10)
     if (d && !summaryDateSet.has(d)) {
-      console.log(`  📋 Backlog gap detected: ${d} has articles but no summary — adding to queue`)
+      console.log(`  📋 Gap detected: ${d} has articles but no summary — adding to queue`)
       affectedDates.add(d)
     }
   }
 
+  // Always include today so a summary is generated even if no new emails arrived
+  // this particular invocation (the summary guarantee pass relies on this).
+  const datesToSummarise = new Set([todayISO, ...affectedDates])
+  console.log(`Generating summaries for: ${[...datesToSummarise].sort().join(', ')}`)
+
   let summaryCount = 0
 
-  if (dayOfWeek === 1) {
-    // Monday: generate a single Sat + Sun + Mon rollup stored under today's date.
-    const satISO = new Date(todayDate.getTime() - 2 * 24 * 60 * 60 * 1000)
-      .toISOString().slice(0, 10)
-    console.log(`Monday — generating weekend rollup: ${satISO} → ${todayISO}`)
+  for (const date of datesToSummarise) {
     summaryCount += await generateDailySummaries(
-      supabase, anthropicKey, categoryList, satISO, todayISO,
+      supabase, anthropicKey, categoryList, date, date,
     )
-    // Also catch any backlog weekday dates (Tue–Fri) that got new articles today.
-    for (const date of affectedDates) {
-      const dow = new Date(date + 'T12:00:00Z').getDay()
-      if (dow >= 2 && dow <= 5 && date !== todayISO) {
-        summaryCount += await generateDailySummaries(
-          supabase, anthropicKey, categoryList, date, date,
-        )
-      }
-    }
-  } else {
-    // Tuesday–Friday: one daily summary per affected date, always including today
-    // so the summary is generated even when no new emails arrived this run.
-    //
-    // Backfill handling: on days where newsletters were processed but their
-    // articles carry older published_at dates (e.g. pipeline was down for a
-    // few days and today's newsletters cover last week's news), today will have
-    // no articles and the summary would be skipped. Instead, we generate a
-    // today-dated summary sourced from the most recently available content date
-    // so the dashboard always shows a fresh entry rather than a stale one.
-    const datesToSummarise = new Set([todayISO, ...affectedDates])
-    console.log(`Generating summaries for dates: ${[...datesToSummarise].join(', ')}`)
-    for (const date of datesToSummarise) {
-      if (date === todayISO) {
-        // Check if today actually has articles before deciding how to source the summary.
-        const { data: todayCheck } = await supabase
-          .from('articles')
-          .select('id')
-          .gte('published_at', `${todayISO}T00:00:00Z`)
-          .lte('published_at', `${todayISO}T23:59:59Z`)
-          .limit(1)
-        if (todayCheck?.length) {
-          // Normal case: articles published today exist, summarise today only.
-          summaryCount += await generateDailySummaries(
-            supabase, anthropicKey, categoryList, todayISO, todayISO,
-          )
-        } else {
-          // Backfill case: no articles published today (pipeline processed older
-          // newsletters, or no new emails this run). Use the most recently
-          // available content date — first from affectedDates, then from the DB.
-          let mostRecentContentDate = [...affectedDates].filter(d => d < todayISO).sort().pop()
-          if (!mostRecentContentDate) {
-            const { data: latestRow } = await supabase
-              .from('articles')
-              .select('published_at')
-              .order('published_at', { ascending: false })
-              .limit(1)
-            mostRecentContentDate = latestRow?.[0]?.published_at?.slice(0, 10)
-          }
-          if (mostRecentContentDate) {
-            console.log(`  📋 Backfill: no articles for ${todayISO} — sourcing today's summary from ${mostRecentContentDate}`)
-            summaryCount += await generateDailySummaries(
-              supabase, anthropicKey, categoryList, mostRecentContentDate, todayISO,
-            )
-          }
-        }
-      } else {
-        summaryCount += await generateDailySummaries(
-          supabase, anthropicKey, categoryList, date, date,
-        )
-      }
-    }
   }
 
   const result = {
@@ -648,12 +590,8 @@ Respond ONLY with the JSON array, no markdown, no explanation.`
 
 /**
  * Generate (or regenerate) daily summaries for a date range.
- *
- * For normal weekdays (Tue–Fri): startDate === endDate (single day).
- * For Monday rollups:            startDate = Saturday, endDate = Monday.
- *   - Articles from the entire Sat–Mon window are included.
- *   - The summary row is stored under endDate (Monday) so it surfaces in
- *     today's briefing.
+ * Normally startDate === endDate (single day).
+ * Pass a wider range to backfill a multi-day gap.
  */
 async function generateDailySummaries(
   supabase: ReturnType<typeof createClient>,

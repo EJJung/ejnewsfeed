@@ -4,7 +4,7 @@
  * Connects to ej.newsfeed@gmail.com via Gmail API, pulls unread inbox
  * messages, and saves them as raw_emails rows in Supabase.
  *
- * Triggered by pg_cron at 7:00am UTC Mon–Fri (adjust for your timezone).
+ * Triggered by pg_cron at 14:00 UTC daily (adjust hour for your timezone).
  * Can also be invoked manually via HTTP POST.
  */
 
@@ -95,31 +95,33 @@ Deno.serve(async (req) => {
 
     const authHeader = { Authorization: `Bearer ${accessToken}` }
 
-    // ── 2. List inbox messages with a day-aware window ────────────────────
-    // Monday uses 4d to catch emails that arrived over the weekend (Sat/Sun).
-    // Other weekdays use 2d as a buffer in case yesterday's run was missed.
+    // ── 2. List inbox messages for today ──────────────────────────────────
+    // The pipeline now runs every day (including weekends), so we query
+    // only emails received on the current calendar day (UTC).
+    // Gmail's after:/before: use YYYY/MM/DD format.
     // Deduplication via gmail_message_id uniqueness prevents re-saving emails
-    // that were already fetched in a previous run.
+    // that were already fetched in a previous run (e.g. morning + afternoon).
     //
     // Optional POST body overrides:
-    //   daysBack  — integer, overrides the day-of-week window
-    //   query     — string, fully overrides the Gmail q= parameter
-    //               e.g. "in:inbox after:2026/05/12 before:2026/05/14"
+    //   query      — string, fully overrides the Gmail q= parameter
+    //                e.g. "in:inbox after:2026/05/12 before:2026/05/14"
     //   maxResults — integer (1–500), overrides the default 50
-    let bodyDaysBack: number | null = null
     let bodyQuery: string | null = null
     let bodyMaxResults: number | null = null
     try {
       const body = await req.json()
-      if (typeof body?.daysBack === 'number' && body.daysBack > 0) bodyDaysBack = body.daysBack
       if (typeof body?.query === 'string' && body.query.trim()) bodyQuery = body.query.trim()
       if (typeof body?.maxResults === 'number' && body.maxResults > 0) bodyMaxResults = Math.min(body.maxResults, 500)
     } catch { /* empty body or non-JSON — ignore */ }
 
-    const dayOfWeek = new Date().getDay() // 0=Sun, 1=Mon, ..., 6=Sat
-    const daysBack = bodyDaysBack ?? (dayOfWeek === 1 ? 4 : 2)
+    // Build today's date window in Gmail query format (YYYY/MM/DD, UTC)
+    const now = new Date()
+    const todayStr = now.toISOString().slice(0, 10).replace(/-/g, '/')
+    const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+    const tomorrowStr = tomorrow.toISOString().slice(0, 10).replace(/-/g, '/')
+
     const maxResults = bodyMaxResults ?? 50
-    const gmailQuery = bodyQuery ?? `in:inbox+newer_than:${daysBack}d`
+    const gmailQuery = bodyQuery ?? `in:inbox after:${todayStr} before:${tomorrowStr}`
 
     const listRes = await fetch(
       `${GMAIL_BASE}/messages?q=${encodeURIComponent(gmailQuery)}&maxResults=${maxResults}`,
@@ -209,7 +211,7 @@ Deno.serve(async (req) => {
       status: 'success',
       emails_fetched: savedCount,
       emails_skipped: skippedCount,
-      metadata: { total_inbox: messages.length, query: gmailQuery },
+      metadata: { total_inbox: messages.length, query: gmailQuery, date: now.toISOString().slice(0, 10) },
     })
 
     return new Response(JSON.stringify(result), {

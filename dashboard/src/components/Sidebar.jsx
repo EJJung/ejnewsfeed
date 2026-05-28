@@ -16,6 +16,7 @@ export default function Sidebar({ categories = [], savedCount, onClose }) {
     if (key === 'briefing') navigate('/briefing')
     else if (key === 'saved') navigate('/saved')
     else if (key === 'trends') navigate('/trends')
+    else if (key === 'admin') navigate('/admin')
     else navigate(`/category/${key}`)
   }
 
@@ -94,6 +95,21 @@ export default function Sidebar({ categories = [], savedCount, onClose }) {
           icon={
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          }
+        />
+
+        <div className="pt-4 pb-0.5">
+          <div className="h-px bg-gray-800" />
+        </div>
+
+        <NavItem
+          label="Pipeline Admin"
+          isActive={activeNav === 'admin'}
+          onClick={() => handleNav('admin')}
+          icon={
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9 10a3 3 0 106 0 3 3 0 00-6 0z" />
             </svg>
           }
         />

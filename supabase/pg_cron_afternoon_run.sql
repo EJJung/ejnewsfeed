@@ -8,7 +8,7 @@
 -- until the following morning.
 --
 -- This adds fetch-emails at 6:00 PM EDT (22:00 UTC) and
--- process-emails at 6:10 PM EDT (22:10 UTC), Mon–Fri.
+-- process-emails at 6:10 PM EDT (22:10 UTC), every day.
 -- A summary-guarantee pass runs at 6:25 PM EDT (22:25 UTC).
 --
 -- HOW TO RUN: paste this into Supabase SQL Editor → New Query
@@ -22,7 +22,7 @@
 
 SELECT cron.schedule(
   'fetch-emails-afternoon',       -- job name (unique)
-  '0 22 * * 1-5',                 -- cron: 22:00 UTC = 6:00 PM EDT Mon–Fri
+  '0 22 * * *',                   -- cron: 22:00 UTC = 6:00 PM EDT every day
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
@@ -41,7 +41,7 @@ SELECT cron.schedule(
 
 SELECT cron.schedule(
   'process-emails-afternoon',     -- job name (unique)
-  '10 22 * * 1-5',                -- cron: 22:10 UTC = 6:10 PM EDT Mon–Fri
+  '10 22 * * *',                  -- cron: 22:10 UTC = 6:10 PM EDT every day
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
@@ -63,7 +63,7 @@ SELECT cron.schedule(
 
 SELECT cron.schedule(
   'process-emails-afternoon-guarantee',   -- job name (unique)
-  '25 22 * * 1-5',                        -- cron: 22:25 UTC = 6:25 PM EDT Mon–Fri
+  '25 22 * * *',                          -- cron: 22:25 UTC = 6:25 PM EDT every day
   $$
     SELECT net.http_post(
       url     := (SELECT value FROM _pipeline_config WHERE key = 'supabase_url')
