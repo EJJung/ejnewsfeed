@@ -8,12 +8,13 @@ const todayLabel = format(new Date(), 'EEEE, MMMM d, yyyy')
 const todayISO   = format(new Date(), 'yyyy-MM-dd')
 
 export default function ScanView({ categories, selectedCategory, onArticleClick, savedArticles, onToggleSave }) {
-  const [summaries, setSummaries]     = useState([])
-  const [articles, setArticles]       = useState([])
-  const [loading, setLoading]         = useState(true)
-  const [refreshing, setRefreshing]   = useState(false)
-  const [summaryDate, setSummaryDate] = useState(null)
-  const [lastFetched, setLastFetched] = useState(null)
+  const [summaries, setSummaries]         = useState([])
+  const [articles, setArticles]           = useState([])
+  const [loading, setLoading]             = useState(true)
+  const [refreshing, setRefreshing]       = useState(false)
+  const [summaryDate, setSummaryDate]     = useState(null)
+  const [mostRecentDate, setMostRecentDate] = useState(todayISO)
+  const [lastFetched, setLastFetched]     = useState(null)
 
   const isSavedView    = selectedCategory === 'saved'
   const isCategoryView = !!selectedCategory && !isSavedView
@@ -79,11 +80,11 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
       if (isCategoryView) summaryQuery = summaryQuery.eq('category_id', selectedCategory)
 
       const { data: summaryRows } = await summaryQuery
-      const mostRecentDate = summaryRows?.[0]?.date || null
-      const latestSummaries = mostRecentDate
-        ? summaryRows.filter(s => s.date === mostRecentDate)
+      const latestSummaryDate = summaryRows?.[0]?.date || null
+      const latestSummaries = latestSummaryDate
+        ? summaryRows.filter(s => s.date === latestSummaryDate)
         : []
-      setSummaryDate(mostRecentDate)
+      setSummaryDate(latestSummaryDate)
       setSummaries(latestSummaries)
 
       // ── Fetch articles ───────────────────────────────────────────────────
@@ -96,25 +97,19 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         .order('published_at', { ascending: false })
 
       if (isBriefing) {
-        // Morning Briefing: show articles from the most recently published date.
-        // On normal days this is today. On backfill days (e.g. pipeline was down
-        // and newsletters were processed late), summaries may be dated today but
-        // articles have an earlier published_at — so we query the actual latest
-        // article date rather than hard-coding today, keeping the feed in sync
-        // with whatever content the summaries are covering.
-        let articleFilterDate = todayISO
+        // Morning Briefing: fetch all articles from the last 7 days so past news
+        // can be shown under each category. Find the most recent published date
+        // first — that date's articles are shown as "current", older ones as "past".
         const { data: latestArticleRow } = await supabase
           .from('articles')
           .select('published_at')
           .order('published_at', { ascending: false })
           .limit(1)
-        if (latestArticleRow?.[0]?.published_at) {
-          articleFilterDate = latestArticleRow[0].published_at.slice(0, 10)
-        }
+        const latestDate = latestArticleRow?.[0]?.published_at?.slice(0, 10) || todayISO
+        setMostRecentDate(latestDate)
         articleQuery = articleQuery
-          .gte('published_at', `${articleFilterDate}T00:00:00Z`)
-          .lte('published_at', `${articleFilterDate}T23:59:59.999Z`)
-          .limit(200)
+          .gte('published_at', subDays(new Date(), 7).toISOString())
+          .limit(500)
       } else {
         // Category view: last 7 days for that category
         articleQuery = articleQuery
@@ -138,18 +133,16 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
     }
   }
 
-  // Split articles into today vs past using published_at (email send date),
-  // not created_at. Weekend emails processed on Monday get published_at =
-  // Saturday, so they correctly land in Past News, not today's section.
-  const todayArticles = isCategoryView
-    ? articles.filter(a => (a.published_at || '').startsWith(todayISO))
-    : articles
+  // Split articles into "current" vs "past".
+  // For briefing: current = most recent date in DB (may not be today if pipeline
+  // was down), past = everything older within the 7-day fetch window.
+  // For category view: current = today, past = all other days in the 7-day window.
+  const currentDateKey = isBriefing ? mostRecentDate : todayISO
 
-  const pastArticles = isCategoryView
-    ? articles.filter(a => !(a.published_at || '').startsWith(todayISO))
-    : []
+  const currentArticles = articles.filter(a => (a.published_at || '').startsWith(currentDateKey))
+  const pastArticles    = articles.filter(a => !(a.published_at || '').startsWith(currentDateKey))
 
-  // Group past articles by their published date
+  // Group past articles by date (used by category view's flat PastNewsSection)
   const pastByDate = pastArticles.reduce((acc, a) => {
     const d = (a.published_at || '').slice(0, 10)
     if (!acc[d]) acc[d] = []
@@ -197,7 +190,7 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
           <p className="text-sm text-gray-500 mt-1">
             {isBriefing
               ? `${articles.length} article${articles.length !== 1 ? 's' : ''} across ${displayCategories.length} interest areas`
-              : `${todayArticles.length} today · ${pastArticles.length} past`}
+              : `${currentArticles.length} today · ${pastArticles.length} past`}
             {summaryIsStale && (
               <span className="ml-2 text-amber-500">· Summaries from {summaryDate}</span>
             )}
@@ -235,16 +228,18 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
 
       {/* ── Category sections (briefing or today's articles in category view) */}
       {!isSavedView && displayCategories.map(cat => {
-        const summary = summaries.find(s => s.category_id === cat.id || s.category?.id === cat.id)
-        const catArticles = todayArticles.filter(a => a.primary_category_id === cat.id)
-        if (!summary && catArticles.length === 0) return null
+        const summary     = summaries.find(s => s.category_id === cat.id || s.category?.id === cat.id)
+        const catCurrent  = currentArticles.filter(a => a.primary_category_id === cat.id)
+        const catPast     = pastArticles.filter(a => a.primary_category_id === cat.id)
+        if (!summary && catCurrent.length === 0 && catPast.length === 0) return null
 
         return (
           <CategorySection
             key={cat.id}
             category={cat}
             summary={summary}
-            articles={catArticles}
+            articles={catCurrent}
+            pastArticles={isBriefing ? catPast : []}
             onArticleClick={onArticleClick}
             savedArticles={savedArticles}
             onToggleSave={onToggleSave}
@@ -290,7 +285,16 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
 
 // ── Components ──────────────────────────────────────────────────────────────
 
-function CategorySection({ category, summary, articles, onArticleClick, savedArticles, onToggleSave }) {
+function CategorySection({ category, summary, articles, pastArticles = [], onArticleClick, savedArticles, onToggleSave }) {
+  // Group past articles by date for this category
+  const pastByDate = pastArticles.reduce((acc, a) => {
+    const d = (a.published_at || '').slice(0, 10)
+    if (!acc[d]) acc[d] = []
+    acc[d].push(a)
+    return acc
+  }, {})
+  const pastDates = Object.keys(pastByDate).sort((a, b) => b.localeCompare(a))
+
   return (
     <section className="mb-10">
       <div className="flex items-center gap-2.5 mb-3">
@@ -324,6 +328,45 @@ function CategorySection({ category, summary, articles, onArticleClick, savedArt
           />
         ))}
       </div>
+
+      {/* Past articles for this category, grouped by date */}
+      {pastDates.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center gap-3 mb-5">
+            <div className="h-px flex-1 bg-gray-200" />
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Past News</span>
+            <div className="h-px flex-1 bg-gray-200" />
+          </div>
+
+          {pastDates.map(date => (
+            <div key={date} className="mb-6">
+              <div className="flex items-center gap-2 mb-2.5">
+                <svg className="w-3.5 h-3.5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <h3 className="text-xs font-semibold text-gray-400">
+                  {format(parseISO(date + 'T12:00:00Z'), 'EEEE, MMMM d')}
+                </h3>
+                <span className="text-xs text-gray-300">
+                  · {pastByDate[date].length} article{pastByDate[date].length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="space-y-2.5">
+                {pastByDate[date].map(article => (
+                  <ArticleCard
+                    key={article.id}
+                    article={article}
+                    category={category}
+                    isSaved={savedArticles.has(article.id)}
+                    onArticleClick={onArticleClick}
+                    onToggleSave={onToggleSave}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   )
 }
