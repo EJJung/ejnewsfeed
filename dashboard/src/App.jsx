@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom'
 import Sidebar from './components/Sidebar.jsx'
 import ScanView from './components/ScanView.jsx'
 import DiveView from './components/DiveView.jsx'
 import TrendsView from './components/TrendsView.jsx'
-import { supabase, isMockMode } from './lib/supabase.js'
+import LoginPage from './components/LoginPage.jsx'
+import RequestAccessPage from './components/RequestAccessPage.jsx'
+import { supabase, isMockMode, signOut, checkApproval, ADMIN_EMAIL } from './lib/supabase.js'
 import { CATEGORIES } from './lib/mockData.js'
 import PrivacyPage from './components/PrivacyPage.jsx'
 import TermsPage from './components/TermsPage.jsx'
@@ -12,19 +14,53 @@ import AdminView from './components/AdminView.jsx'
 
 const LS_KEY = 'ej_saved_article_ids'
 
+// authState: 'loading' | 'unauthenticated' | 'checking' | 'request-access' | 'authenticated'
+
 export default function App() {
+  const [authState, setAuthState]     = useState(isMockMode ? 'authenticated' : 'loading')
+  const [authUser, setAuthUser]       = useState(null)
+  const [requestInfo, setRequestInfo] = useState(null) // { email, existingStatus }
   const [savedArticles, setSavedArticles] = useState(new Set())
   const [categories, setCategories]       = useState(CATEGORIES)
   const [sidebarOpen, setSidebarOpen]     = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
 
+  // Auth setup
+  const handleAuthUser = useCallback(async (user) => {
+    setAuthState('checking')
+    setAuthUser(user)
+    const result = await checkApproval(user)
+    if (result.approved) {
+      setAuthState('authenticated')
+    } else {
+      setRequestInfo({ email: user.email, existingStatus: result.existingStatus })
+      setAuthState('request-access')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isMockMode) return
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        await handleAuthUser(session.user)
+      } else {
+        setAuthState('unauthenticated')
+        setAuthUser(null)
+        setRequestInfo(null)
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [handleAuthUser])
+
   // Close sidebar on route change (mobile)
   useEffect(() => { setSidebarOpen(false) }, [location.pathname])
 
-  // Fetch live categories once on mount
+  // Fetch live categories once authenticated
   useEffect(() => {
-    if (isMockMode) return
+    if (isMockMode || authState !== 'authenticated') return
     supabase
       .from('categories')
       .select('id, name, color, description')
@@ -32,14 +68,14 @@ export default function App() {
       .then(({ data, error }) => {
         if (!error && data?.length) setCategories(data)
       })
-  }, [])
+  }, [authState])
 
   // Load saved articles — localStorage first (instant), then sync from Supabase
   useEffect(() => {
     const stored = JSON.parse(localStorage.getItem(LS_KEY) || '[]')
     if (stored.length) setSavedArticles(new Set(stored))
 
-    if (isMockMode) return
+    if (isMockMode || authState !== 'authenticated') return
 
     supabase
       .from('saved_articles')
@@ -51,7 +87,7 @@ export default function App() {
           localStorage.setItem(LS_KEY, JSON.stringify([...ids]))
         }
       })
-  }, [])
+  }, [authState])
 
   async function handleToggleSave(articleId) {
     const isSaving = !savedArticles.has(articleId)
@@ -77,7 +113,34 @@ export default function App() {
     navigate(`/article/${article.id}`, { state: { article } })
   }
 
+  const isAdmin = isMockMode || authUser?.email === ADMIN_EMAIL
   const scanProps = { categories, onArticleClick: handleArticleClick, savedArticles, onToggleSave: handleToggleSave }
+
+  // Auth gates
+  if (authState === 'loading' || authState === 'checking') {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <svg className="w-5 h-5 animate-spin text-gray-400" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      </div>
+    )
+  }
+
+  if (authState === 'unauthenticated') {
+    return <LoginPage />
+  }
+
+  if (authState === 'request-access') {
+    return (
+      <RequestAccessPage
+        email={requestInfo.email}
+        existingStatus={requestInfo.existingStatus}
+        onSignOut={signOut}
+      />
+    )
+  }
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
@@ -100,7 +163,13 @@ export default function App() {
         fixed inset-y-0 left-0 z-50 transform transition-transform duration-200 ease-in-out md:relative md:translate-x-0
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
-        <Sidebar categories={categories} savedCount={savedArticles.size} onClose={() => setSidebarOpen(false)} />
+        <Sidebar
+          categories={categories}
+          savedCount={savedArticles.size}
+          onClose={() => setSidebarOpen(false)}
+          isAdmin={isAdmin}
+          onSignOut={isMockMode ? undefined : signOut}
+        />
       </div>
 
       <main className={`flex-1 overflow-hidden ${isMockMode ? 'mt-8' : ''}`}>
@@ -134,7 +203,7 @@ export default function App() {
             <Route path="/article/:articleId" element={<ArticleRoute savedArticles={savedArticles} onToggleSave={handleToggleSave} />} />
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />
-            <Route path="/admin" element={<AdminView />} />
+            <Route path="/admin" element={isAdmin ? <AdminView /> : <Navigate to="/briefing" replace />} />
             <Route path="*" element={<Navigate to="/briefing" replace />} />
           </Routes>
         </div>

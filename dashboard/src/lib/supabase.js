@@ -10,6 +10,26 @@ export const supabase = supabaseUrl && supabaseKey
 
 export const isMockMode = !supabase
 
+export const ADMIN_EMAIL = 'ej.newsfeed@gmail.com'
+
+export async function signOut() {
+  if (supabase) await supabase.auth.signOut()
+}
+
+// Returns { approved: true } or { approved: false, existingStatus: 'pending'|null }
+export async function checkApproval(user) {
+  if (user.email === ADMIN_EMAIL) return { approved: true }
+
+  const { data } = await supabase
+    .from('signup_requests')
+    .select('status')
+    .eq('email', user.email)
+    .maybeSingle()
+
+  if (data?.status === 'approved') return { approved: true }
+  return { approved: false, existingStatus: data?.status ?? null }
+}
+
 // Log a user interaction (opens, saves, chat usage)
 export async function logInteraction(articleId, action, timeSpentSeconds = null) {
   if (isMockMode) return

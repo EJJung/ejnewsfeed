@@ -47,6 +47,8 @@ export default function AdminView() {
   const [loading, setLoading]         = useState(false)
   const [triggering, setTriggering]   = useState(null) // 'fetch-emails' | 'process-emails'
   const [lastResult, setLastResult]   = useState(null)
+  const [requests, setRequests]       = useState([])
+  const [requestsLoading, setRequestsLoading] = useState(false)
 
   // Load pipeline_runs from Supabase
   const loadRuns = useCallback(async () => {
@@ -61,7 +63,24 @@ export default function AdminView() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { loadRuns() }, [loadRuns])
+  // Load signup requests
+  const loadRequests = useCallback(async () => {
+    if (isMockMode) return
+    setRequestsLoading(true)
+    const { data } = await supabase
+      .from('signup_requests')
+      .select('*')
+      .order('created_at', { ascending: false })
+    setRequests(data || [])
+    setRequestsLoading(false)
+  }, [])
+
+  async function updateRequestStatus(id, status) {
+    await supabase.from('signup_requests').update({ status, updated_at: new Date().toISOString() }).eq('id', id)
+    loadRequests()
+  }
+
+  useEffect(() => { loadRuns(); loadRequests() }, [loadRuns, loadRequests])
 
   // ── Secret auth ─────────────────────────────────────────────────────────────
 
@@ -192,6 +211,47 @@ export default function AdminView() {
             {JSON.stringify(lastResult.data, null, 2)}
           </div>
         )}
+
+        {/* Signup requests */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-700">Access Requests</h2>
+            <button onClick={loadRequests} disabled={requestsLoading} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">
+              {requestsLoading ? 'Loading…' : 'Refresh'}
+            </button>
+          </div>
+          {isMockMode ? (
+            <p className="text-sm text-gray-400">Connect Supabase to see requests.</p>
+          ) : requests.length === 0 && !requestsLoading ? (
+            <p className="text-sm text-gray-400">No access requests.</p>
+          ) : (
+            <div className="space-y-2">
+              {requests.map(req => (
+                <div key={req.id} className="bg-white border border-gray-100 rounded-lg px-4 py-3 flex items-center gap-3 text-sm">
+                  <StatusBadge status={req.status} />
+                  <span className="flex-1 text-gray-800 truncate">{req.email}</span>
+                  <span className="text-xs text-gray-400 shrink-0">{relativeTime(req.created_at)}</span>
+                  {req.status === 'pending' && (
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => updateRequestStatus(req.id, 'approved')}
+                        className="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded-md hover:bg-emerald-200 transition-colors font-medium"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => updateRequestStatus(req.id, 'rejected')}
+                        className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 transition-colors font-medium"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {/* Run history */}
         <div>

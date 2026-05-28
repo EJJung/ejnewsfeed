@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Link } from 'react-router-dom'
 
 const today = format(new Date(), 'EEEE, MMMM d')
 
-export default function Sidebar({ categories = [], savedCount, onClose }) {
+export default function Sidebar({ categories = [], savedCount, onClose, isAdmin = false, onSignOut }) {
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -99,27 +99,43 @@ export default function Sidebar({ categories = [], savedCount, onClose }) {
           }
         />
 
-        <div className="pt-4 pb-0.5">
-          <div className="h-px bg-gray-800" />
-        </div>
-
-        <NavItem
-          label="Pipeline Admin"
-          isActive={activeNav === 'admin'}
-          onClick={() => handleNav('admin')}
-          icon={
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9 10a3 3 0 106 0 3 3 0 00-6 0z" />
-            </svg>
-          }
-        />
+        {isAdmin && (
+          <>
+            <div className="pt-4 pb-0.5">
+              <div className="h-px bg-gray-800" />
+            </div>
+            <NavItem
+              label="Pipeline Admin"
+              isActive={activeNav === 'admin'}
+              onClick={() => handleNav('admin')}
+              icon={
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9 10a3 3 0 106 0 3 3 0 00-6 0z" />
+                </svg>
+              }
+            />
+          </>
+        )}
       </nav>
 
       {/* Footer */}
       <div className="px-5 py-4 border-t border-gray-800 space-y-3">
-        <div className="flex items-center gap-2 text-xs text-gray-600">
-          <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white font-semibold text-xs">E</div>
-          <span>ej.newsfeed@gmail.com</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-gray-600">
+            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center text-white font-semibold text-xs">E</div>
+            <span>ej.newsfeed@gmail.com</span>
+          </div>
+          {onSignOut && (
+            <button
+              onClick={onSignOut}
+              className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+              title="Sign out"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-3 text-xs text-gray-600">
           <Link to="/privacy" className="hover:text-gray-400 transition-colors">Privacy Policy</Link>
