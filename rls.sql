@@ -5,8 +5,8 @@
 -- ============================================================
 --
 -- Access model:
---   anon key  = dashboard (read-only on most tables, write on interactions/saves)
---   service_role = Edge Functions (bypasses RLS entirely — no policies needed)
+--   authenticated = dashboard users (login required — all read/write policies use this role)
+--   service_role  = Edge Functions (bypasses RLS entirely — no policies needed)
 -- ============================================================
 
 -- ── Enable RLS on all tables ───────────────────────────────────────────────
@@ -36,61 +36,70 @@ DROP POLICY IF EXISTS "anon can log interactions"        ON user_interactions;
 DROP POLICY IF EXISTS "anon can read saved_articles"     ON saved_articles;
 DROP POLICY IF EXISTS "anon can save articles"           ON saved_articles;
 DROP POLICY IF EXISTS "anon can unsave articles"         ON saved_articles;
+DROP POLICY IF EXISTS "anon_read_categories"             ON categories;
+DROP POLICY IF EXISTS "anon_read_sources"                ON sources;
+DROP POLICY IF EXISTS "anon_read_articles"               ON articles;
+DROP POLICY IF EXISTS "anon_read_article_analyses"       ON article_analyses;
+DROP POLICY IF EXISTS "anon_read_daily_summaries"        ON daily_summaries;
+DROP POLICY IF EXISTS "anon_read_trend_summaries"        ON trend_summaries;
+DROP POLICY IF EXISTS "anon_insert_interactions"         ON user_interactions;
+DROP POLICY IF EXISTS "anon_read_saved_articles"         ON saved_articles;
+DROP POLICY IF EXISTS "anon_insert_saved_articles"       ON saved_articles;
+DROP POLICY IF EXISTS "anon_delete_saved_articles"       ON saved_articles;
 
 -- ── categories — read only ─────────────────────────────────────────────────
 
-CREATE POLICY "anon_read_categories"
-  ON categories FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_categories"
+  ON categories FOR SELECT TO authenticated USING (true);
 
 -- ── sources — read only ────────────────────────────────────────────────────
 
-CREATE POLICY "anon_read_sources"
-  ON sources FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_sources"
+  ON sources FOR SELECT TO authenticated USING (true);
 
 -- ── articles — read only ───────────────────────────────────────────────────
 
-CREATE POLICY "anon_read_articles"
-  ON articles FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_articles"
+  ON articles FOR SELECT TO authenticated USING (true);
 
 -- ── article_analyses — read only ───────────────────────────────────────────
 -- INSERT is handled by generate-analysis Edge Function via service_role.
--- No anon write access needed.
 
-CREATE POLICY "anon_read_article_analyses"
-  ON article_analyses FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_article_analyses"
+  ON article_analyses FOR SELECT TO authenticated USING (true);
 
 -- ── daily_summaries — read only ────────────────────────────────────────────
 
-CREATE POLICY "anon_read_daily_summaries"
-  ON daily_summaries FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_daily_summaries"
+  ON daily_summaries FOR SELECT TO authenticated USING (true);
 
 -- ── trend_summaries — read only ────────────────────────────────────────────
 
-CREATE POLICY "anon_read_trend_summaries"
-  ON trend_summaries FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_trend_summaries"
+  ON trend_summaries FOR SELECT TO authenticated USING (true);
 
 -- ── user_interactions — insert only (no read — protects usage privacy) ─────
 
-CREATE POLICY "anon_insert_interactions"
-  ON user_interactions FOR INSERT TO anon WITH CHECK (true);
+CREATE POLICY "auth_insert_interactions"
+  ON user_interactions FOR INSERT TO authenticated WITH CHECK (true);
 
 -- ── saved_articles — read, save, unsave ───────────────────────────────────
 
-CREATE POLICY "anon_read_saved_articles"
-  ON saved_articles FOR SELECT TO anon USING (true);
+CREATE POLICY "auth_read_saved_articles"
+  ON saved_articles FOR SELECT TO authenticated USING (true);
 
-CREATE POLICY "anon_insert_saved_articles"
-  ON saved_articles FOR INSERT TO anon WITH CHECK (true);
+CREATE POLICY "auth_insert_saved_articles"
+  ON saved_articles FOR INSERT TO authenticated WITH CHECK (true);
 
-CREATE POLICY "anon_delete_saved_articles"
-  ON saved_articles FOR DELETE TO anon USING (true);
+CREATE POLICY "auth_delete_saved_articles"
+  ON saved_articles FOR DELETE TO authenticated USING (true);
 
 -- ── raw_emails — fully blocked (pipeline only, via service_role) ───────────
--- No policies added. RLS enabled = all anon access denied.
+-- No policies added. RLS enabled = all authenticated access denied.
 
 -- ── _pipeline_config — fully blocked (internal cron config) ───────────────
 -- Contains Supabase URL + anon key used by pg_cron jobs.
--- No anon access needed — only pg_cron (service_role) reads this.
+-- No authenticated access needed — only pg_cron (service_role) reads this.
 
 -- ── Verify final state ─────────────────────────────────────────────────────
 
