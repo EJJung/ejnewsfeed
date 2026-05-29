@@ -74,7 +74,7 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
       let summaryQuery = supabase
         .from('daily_summaries')
         .select('*, category:categories(id, name, color)')
-        .gte('date', format(subDays(new Date(), 7), 'yyyy-MM-dd'))
+        .gte('date', format(subDays(new Date(), 30), 'yyyy-MM-dd'))
         .order('date', { ascending: false })
 
       if (isCategoryView) summaryQuery = summaryQuery.eq('category_id', selectedCategory)
@@ -97,7 +97,7 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         .order('published_at', { ascending: false })
 
       if (isBriefing) {
-        // Morning Briefing: fetch all articles from the last 7 days so past news
+        // Morning Briefing: fetch all articles from the last 30 days so past news
         // can be shown under each category. Find the most recent published date
         // first — that date's articles are shown as "current", older ones as "past".
         const { data: latestArticleRow } = await supabase
@@ -108,12 +108,12 @@ export default function ScanView({ categories, selectedCategory, onArticleClick,
         const latestDate = latestArticleRow?.[0]?.published_at?.slice(0, 10) || todayISO
         setMostRecentDate(latestDate)
         articleQuery = articleQuery
-          .gte('published_at', subDays(new Date(), 7).toISOString())
+          .gte('published_at', subDays(new Date(), 30).toISOString())
           .limit(500)
       } else {
-        // Category view: last 7 days for that category
+        // Category view: last 30 days for that category
         articleQuery = articleQuery
-          .gte('published_at', subDays(new Date(), 7).toISOString())
+          .gte('published_at', subDays(new Date(), 30).toISOString())
           .eq('primary_category_id', selectedCategory)
           .limit(200)
       }
