@@ -60,25 +60,23 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: 'Supabase credentials not configured on server' })
   }
 
+  // Fire the edge function without awaiting — Vercel Hobby has a 10s limit
+  // which is shorter than fetch-emails / process-emails runtime.
+  // We return 202 immediately; the edge function writes results to pipeline_runs.
   try {
-    const edgeRes = await fetch(`${supabaseUrl}/functions/v1/${job}`, {
+    fetch(`${supabaseUrl}/functions/v1/${job}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${serviceKey}`,
       },
       body: JSON.stringify(params),
-    })
+    }).catch(() => {}) // suppress unhandled rejection — we don't await this
 
-    const text = await edgeRes.text()
-    let result
-    try { result = JSON.parse(text) } catch { result = { raw: text } }
-
-    return res.status(edgeRes.ok ? 200 : 502).json({
-      ok: edgeRes.ok,
+    return res.status(202).json({
+      ok: true,
       job,
-      status: edgeRes.status,
-      result,
+      message: 'Job triggered — check Run History for results.',
     })
   } catch (err) {
     return res.status(500).json({ ok: false, error: String(err) })

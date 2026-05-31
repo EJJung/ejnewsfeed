@@ -108,8 +108,11 @@ export default function AdminView() {
       })
       const data = await res.json()
       setLastResult({ job, ok: data.ok, data })
-      // Refresh runs after a short delay so the new pipeline_runs row is visible
-      setTimeout(loadRuns, 2000)
+      // Poll for the new pipeline_runs row — edge functions can take 30–60s
+      setTimeout(loadRuns, 5000)
+      setTimeout(loadRuns, 15000)
+      setTimeout(loadRuns, 30000)
+      setTimeout(loadRuns, 60000)
     } catch (err) {
       setLastResult({ job, ok: false, data: { error: String(err) } })
     } finally {
