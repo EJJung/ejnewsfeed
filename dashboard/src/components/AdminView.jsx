@@ -4,11 +4,15 @@
  * Lets EJ manually trigger fetch-emails or process-emails,
  * and shows the last 20 pipeline run records from Supabase.
  *
- * Auth: prompts for PIPELINE_ADMIN_SECRET (stored in localStorage
- * so you only need to enter it once per browser).
+ * Features:
+ *  - Today's health banner (did the daily run succeed?)
+ *  - Auto-refresh run history while a job is running
+ *  - Gmail auth health check (catch expired tokens early)
+ *  - Expandable error details in run history
+ *  - Re-run yesterday quick button in Fetch Overrides
  */
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase, isMockMode } from '../lib/supabase.js'
 
 const LS_SECRET_KEY = 'ej_pipeline_admin_secret'
@@ -24,17 +28,78 @@ function relativeTime(iso) {
   return `${Math.round(diff / 86400)}d ago`
 }
 
+function todayUTC() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function yesterdayUTC() {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
 function StatusBadge({ status }) {
   const styles = {
-    success: 'bg-emerald-900/40 text-emerald-400 border border-emerald-800',
-    error:   'bg-red-900/40 text-red-400 border border-red-800',
-    running: 'bg-blue-900/40 text-blue-400 border border-blue-800',
-    partial: 'bg-amber-900/40 text-amber-400 border border-amber-800',
+    success: 'bg-emerald-100 text-emerald-700 border border-emerald-200',
+    error:   'bg-red-100 text-red-600 border border-red-200',
+    running: 'bg-blue-100 text-blue-600 border border-blue-200',
+    partial: 'bg-amber-100 text-amber-700 border border-amber-200',
   }
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[status] || 'bg-gray-800 text-gray-400'}`}>
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${styles[status] || 'bg-gray-100 text-gray-500'}`}>
       {status}
     </span>
+  )
+}
+
+// ── Health Banner ─────────────────────────────────────────────────────────────
+
+function HealthBanner({ runs }) {
+  const today = todayUTC()
+  const todayRuns = runs.filter(r => r.started_at?.startsWith(today))
+
+  const fetchRun   = todayRuns.find(r => r.job_name === 'fetch-emails')
+  const processRun = todayRuns.find(r => r.job_name === 'process-emails')
+
+  const anyRunning = todayRuns.some(r => r.status === 'running')
+  const anyError   = todayRuns.some(r => r.status === 'error')
+  const bothOk     = fetchRun?.status === 'success' && processRun?.status === 'success'
+
+  if (runs.length === 0) return null
+
+  let bg, icon, title, detail
+  if (anyRunning) {
+    bg = 'bg-blue-50 border-blue-200'; icon = '⏳'; title = 'Pipeline running'
+    detail = 'A job is currently in progress — run history refreshes automatically.'
+  } else if (anyError) {
+    const errRun = todayRuns.find(r => r.status === 'error')
+    bg = 'bg-red-50 border-red-200'; icon = '❌'; title = `Today's pipeline failed`
+    detail = errRun?.error_message
+      ? errRun.error_message.slice(0, 120)
+      : 'Check run history below for details.'
+  } else if (bothOk) {
+    const arts = processRun?.articles_saved ?? 0
+    const sums = processRun?.summaries_generated ?? 0
+    bg = 'bg-emerald-50 border-emerald-200'; icon = '✅'; title = "Today's pipeline succeeded"
+    detail = `${fetchRun?.emails_fetched ?? 0} emails fetched · ${arts} articles saved · ${sums} summaries generated`
+  } else if (!fetchRun && !processRun) {
+    bg = 'bg-gray-50 border-gray-200'; icon = '🕐'; title = "No runs yet today"
+    detail = 'The daily pg_cron job runs at 10:00 AM EDT. Use the buttons below to run manually.'
+  } else {
+    bg = 'bg-amber-50 border-amber-200'; icon = '⚠️'; title = 'Pipeline partially complete'
+    detail = `fetch-emails: ${fetchRun?.status ?? 'not run'} · process-emails: ${processRun?.status ?? 'not run'}`
+  }
+
+  return (
+    <div className={`rounded-xl border p-4 ${bg}`}>
+      <div className="flex items-start gap-3">
+        <span className="text-lg leading-none mt-0.5">{icon}</span>
+        <div>
+          <p className="text-sm font-semibold text-gray-800">{title}</p>
+          <p className="text-xs text-gray-500 mt-0.5">{detail}</p>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -45,10 +110,13 @@ export default function AdminView() {
   const [secretInput, setSecretInput] = useState('')
   const [runs, setRuns]               = useState([])
   const [loading, setLoading]         = useState(false)
-  const [triggering, setTriggering]   = useState(null) // 'fetch-emails' | 'process-emails'
+  const [triggering, setTriggering]   = useState(null)
   const [lastResult, setLastResult]   = useState(null)
   const [requests, setRequests]       = useState([])
   const [requestsLoading, setRequestsLoading] = useState(false)
+  const [authChecking, setAuthChecking] = useState(false)
+  const [authResult, setAuthResult]     = useState(null) // { ok, message }
+  const pollRef = useRef(null)
 
   // Load pipeline_runs from Supabase
   const loadRuns = useCallback(async () => {
@@ -62,6 +130,20 @@ export default function AdminView() {
     setRuns(data || [])
     setLoading(false)
   }, [])
+
+  // Auto-refresh every 5s while any run is 'running'
+  useEffect(() => {
+    const hasRunning = runs.some(r => r.status === 'running')
+    if (hasRunning && !pollRef.current) {
+      pollRef.current = setInterval(loadRuns, 5000)
+    } else if (!hasRunning && pollRef.current) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    }
+  }, [runs, loadRuns])
 
   // Load signup requests
   const loadRequests = useCallback(async () => {
@@ -97,19 +179,14 @@ export default function AdminView() {
     if (!secret) return
     setTriggering(job)
     setLastResult(null)
+    setAuthResult(null)
     try {
-      // Call Supabase edge function directly — avoids Vercel's 10s serverless
-      // timeout which kills background fetches before they complete.
       const { data, error } = await supabase.functions.invoke(job, {
         body: { ...params, adminSecret: secret },
       })
       const ok = !error
       setLastResult({ job, ok, data: error ? { error: String(error) } : data })
-      // Poll for the pipeline_runs row as the edge function runs
-      setTimeout(loadRuns, 5000)
-      setTimeout(loadRuns, 15000)
-      setTimeout(loadRuns, 30000)
-      setTimeout(loadRuns, 60000)
+      loadRuns()
     } catch (err) {
       setLastResult({ job, ok: false, data: { error: String(err) } })
     } finally {
@@ -117,19 +194,61 @@ export default function AdminView() {
     }
   }
 
+  // ── Gmail auth check ─────────────────────────────────────────────────────────
+  // Calls fetch-emails with a far-future query — touches OAuth but returns 0 emails.
+
+  async function checkGmailAuth() {
+    if (!secret) return
+    setAuthChecking(true)
+    setAuthResult(null)
+    setLastResult(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('fetch-emails', {
+        body: { query: 'in:inbox after:2099/01/01', adminSecret: secret },
+      })
+      if (error) {
+        const msg = String(error)
+        const isToken = msg.includes('invalid_grant') || msg.includes('unauthorized_client') || msg.includes('token')
+        setAuthResult({ ok: false, message: isToken ? '❌ Gmail OAuth token is invalid or expired — regenerate it via OAuth Playground.' : `❌ ${msg}` })
+      } else {
+        setAuthResult({ ok: true, message: '✅ Gmail auth is working.' })
+      }
+    } catch (err) {
+      setAuthResult({ ok: false, message: `❌ ${String(err)}` })
+    } finally {
+      setAuthChecking(false)
+    }
+  }
+
   // ── Render ──────────────────────────────────────────────────────────────────
+
+  const isAnyRunning = runs.some(r => r.status === 'running')
 
   return (
     <div className="h-full overflow-y-auto bg-gray-50">
-      <div className="max-w-3xl mx-auto px-6 py-8 space-y-8">
+      <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
 
         {/* Header */}
-        <div>
-          <h1 className="text-xl font-semibold text-gray-900">Pipeline Admin</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            Manually trigger Supabase Edge Functions and monitor run history.
-          </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-900">Pipeline Admin</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              Manually trigger edge functions and monitor pipeline health.
+            </p>
+          </div>
+          {isAnyRunning && (
+            <span className="flex items-center gap-1.5 text-xs text-blue-600 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-full">
+              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Live
+            </span>
+          )}
         </div>
+
+        {/* Today's health banner */}
+        <HealthBanner runs={runs} />
 
         {/* Secret setup */}
         {!secret && (
@@ -155,15 +274,35 @@ export default function AdminView() {
         )}
 
         {secret && (
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            Admin secret saved
+          <div className="flex items-center gap-3 text-xs text-gray-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              Admin secret saved
+            </span>
             <button
               onClick={() => { localStorage.removeItem(LS_SECRET_KEY); setSecret('') }}
-              className="text-gray-400 hover:text-gray-600 underline ml-1"
+              className="text-gray-400 hover:text-gray-600 underline"
             >
               clear
             </button>
+            <span className="text-gray-200">|</span>
+            <button
+              onClick={checkGmailAuth}
+              disabled={authChecking || !!triggering}
+              className="flex items-center gap-1 text-gray-500 hover:text-gray-700 disabled:opacity-50 transition-colors"
+            >
+              {authChecking
+                ? <><svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> Checking…</>
+                : '🔑 Test Gmail auth'
+              }
+            </button>
+          </div>
+        )}
+
+        {/* Auth check result */}
+        {authResult && (
+          <div className={`text-xs px-3 py-2 rounded-lg border ${authResult.ok ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+            {authResult.message}
           </div>
         )}
 
@@ -256,7 +395,12 @@ export default function AdminView() {
         {/* Run history */}
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-700">Run History</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-gray-700">Run History</h2>
+              {isAnyRunning && (
+                <span className="text-xs text-blue-500 animate-pulse">auto-refreshing</span>
+              )}
+            </div>
             <button
               onClick={loadRuns}
               disabled={loading}
@@ -332,9 +476,24 @@ function FetchOverrides({ onTrigger, triggering }) {
     onTrigger('fetch-emails', params)
   }
 
+  function runYesterday() {
+    const y = yesterdayUTC().replace(/-/g, '/')
+    const tod = todayUTC().replace(/-/g, '/')
+    onTrigger('fetch-emails', { query: `in:inbox after:${y} before:${tod}` })
+  }
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-5">
-      <h3 className="text-sm font-medium text-gray-700 mb-3">Fetch Overrides</h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-medium text-gray-700">Fetch Overrides</h3>
+        <button
+          onClick={runYesterday}
+          disabled={!!triggering}
+          className="text-xs px-3 py-1 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 disabled:opacity-50 transition-colors"
+        >
+          ↩ Re-run yesterday
+        </button>
+      </div>
       <form onSubmit={handleCustomFetch} className="flex flex-col gap-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -372,27 +531,50 @@ function FetchOverrides({ onTrigger, triggering }) {
 }
 
 function RunRow({ run }) {
+  const [expanded, setExpanded] = useState(false)
+
   const duration = run.completed_at && run.started_at
     ? Math.round((new Date(run.completed_at) - new Date(run.started_at)) / 1000)
     : null
 
+  const hasError = !!run.error_message
+
+  const stats = [
+    run.emails_fetched   > 0 && `${run.emails_fetched} fetched`,
+    run.emails_skipped   > 0 && `${run.emails_skipped} skipped`,
+    run.emails_processed > 0 && `${run.emails_processed} processed`,
+    run.articles_saved   > 0 && `${run.articles_saved} articles`,
+    run.summaries_generated > 0 && `${run.summaries_generated} summaries`,
+  ].filter(Boolean).join(' · ')
+
   return (
-    <div className="bg-white border border-gray-100 rounded-lg px-4 py-3 flex items-center gap-3 text-sm">
-      <StatusBadge status={run.status} />
-      <span className="font-medium text-gray-800 w-36 shrink-0">{run.job_name}</span>
-      <span className="text-gray-400 text-xs flex-1 truncate">
-        {run.emails_fetched != null && `fetched ${run.emails_fetched}`}
-        {run.emails_processed != null && `processed ${run.emails_processed}`}
-        {run.articles_saved != null && ` · ${run.articles_saved} articles`}
-        {run.summaries_generated != null && ` · ${run.summaries_generated} summaries`}
-        {run.error_message && <span className="text-red-400"> {run.error_message.slice(0, 60)}</span>}
-      </span>
-      <span className="text-xs text-gray-400 shrink-0">
-        {duration != null ? `${duration}s` : ''}
-      </span>
-      <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
-        {relativeTime(run.started_at)}
-      </span>
+    <div className="bg-white border border-gray-100 rounded-lg overflow-hidden">
+      <div
+        className={`px-4 py-3 flex items-center gap-3 text-sm ${hasError ? 'cursor-pointer hover:bg-gray-50' : ''}`}
+        onClick={() => hasError && setExpanded(e => !e)}
+      >
+        <StatusBadge status={run.status} />
+        <span className="font-medium text-gray-800 w-36 shrink-0">{run.job_name}</span>
+        <span className="text-gray-400 text-xs flex-1 truncate">
+          {stats || (hasError ? <span className="text-red-400">{run.error_message.slice(0, 60)}…</span> : '—')}
+        </span>
+        <span className="text-xs text-gray-400 shrink-0">
+          {duration != null ? `${duration}s` : run.status === 'running' ? '…' : ''}
+        </span>
+        <span className="text-xs text-gray-400 shrink-0 w-20 text-right">
+          {relativeTime(run.started_at)}
+        </span>
+        {hasError && (
+          <span className="text-xs text-gray-400 shrink-0">{expanded ? '▲' : '▼'}</span>
+        )}
+      </div>
+      {expanded && run.error_message && (
+        <div className="px-4 pb-3 pt-0">
+          <pre className="text-xs bg-red-50 border border-red-100 text-red-700 rounded-lg p-3 whitespace-pre-wrap break-all">
+            {run.error_message}
+          </pre>
+        </div>
+      )}
     </div>
   )
 }
