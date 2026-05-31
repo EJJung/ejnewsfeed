@@ -98,17 +98,15 @@ export default function AdminView() {
     setTriggering(job)
     setLastResult(null)
     try {
-      const res = await fetch('/api/trigger-pipeline', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${secret}`,
-        },
-        body: JSON.stringify({ job, params }),
+      // Call Supabase edge function directly — avoids Vercel's 10s serverless
+      // timeout which kills background fetches before they complete.
+      const { data, error } = await supabase.functions.invoke(job, {
+        body: params,
+        headers: { 'x-admin-secret': secret },
       })
-      const data = await res.json()
-      setLastResult({ job, ok: data.ok, data })
-      // Poll for the new pipeline_runs row — edge functions can take 30–60s
+      const ok = !error
+      setLastResult({ job, ok, data: error ? { error: String(error) } : data })
+      // Poll for the pipeline_runs row as the edge function runs
       setTimeout(loadRuns, 5000)
       setTimeout(loadRuns, 15000)
       setTimeout(loadRuns, 30000)
