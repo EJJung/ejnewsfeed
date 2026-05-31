@@ -101,8 +101,7 @@ export default function AdminView() {
       // Call Supabase edge function directly — avoids Vercel's 10s serverless
       // timeout which kills background fetches before they complete.
       const { data, error } = await supabase.functions.invoke(job, {
-        body: params,
-        headers: { 'x-admin-secret': secret },
+        body: { ...params, adminSecret: secret },
       })
       const ok = !error
       setLastResult({ job, ok, data: error ? { error: String(error) } : data })
