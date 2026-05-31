@@ -21,3 +21,8 @@ dashboard/.vercel
 # OS
 .DS_Store
 .vercel
+
+# Audit / logs
+logs/
+pipeline-audit-*.md
+pipeline-root-cause-and-fix-plan.md
