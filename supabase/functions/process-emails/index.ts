@@ -279,24 +279,29 @@ async function processAll(
   const categoryList = categories as Category[]
   const categoryNames = categoryList.map((c) => c.name)
 
-  // Compute today's date once — used for email scoping and summary generation
+  // Compute today's date once — used for summary generation
   const todayDate = new Date()
   const todayISO  = todayDate.toISOString().slice(0, 10)
 
-  // 2. Fetch unprocessed emails received today (UTC 00:00–23:59)
-  // Scoping to today ensures we never process stale backlog emails from previous
-  // days and keeps each invocation's workload predictable (only today's newsletters).
-  const todayStart = `${todayISO}T00:00:00.000Z`
-  const todayEnd   = `${todayISO}T23:59:59.999Z`
+  // 2. Fetch unprocessed emails from a ROLLING 72-HOUR window (oldest first).
+  //
+  // Previously this was scoped to today (UTC) only, which permanently orphaned
+  // any email not processed by midnight UTC — the backlog grew ~15/day to 998
+  // rows (see backlog-analysis-2026-08-15.md). A rolling window lets later
+  // invocations catch up on spillover from previous days, while the lower
+  // bound still prevents churning through ancient stale backlog.
+  const windowStart = new Date(todayDate.getTime() - 72 * 60 * 60 * 1000).toISOString()
 
   const { data: emails, error: emailErr } = await supabase
     .from('raw_emails')
     .select('id, subject, sender, source_id, received_at, raw_html, raw_text')
     .eq('processed', false)
-    .gte('received_at', todayStart)
-    .lte('received_at', todayEnd)
-    .order('received_at', { ascending: true }) // oldest-first within today so earlier newsletters are processed first
-    .limit(2) // process up to 2 per run — 5 was hitting the 150s EdgeRuntime timeout before articles could be saved
+    .gte('received_at', windowStart)
+    .order('received_at', { ascending: true }) // oldest-first so spillover clears before new arrivals
+    .limit(4) // 4 per run × 8 daily invocations ≈ 32/day capacity vs ~25–30 arrivals.
+              // (2 starved the queue; 5 hit the 150s EdgeRuntime timeout. Articles are
+              // saved before summaries, and the summary-guarantee pass backfills any
+              // summaries dropped if the budget runs out.)
 
   if (emailErr) {
     const msg = `Failed to fetch raw_emails: ${emailErr.message}`

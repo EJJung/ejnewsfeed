@@ -99,21 +99,38 @@ def audit_email_fetch(target_date: date) -> list[CheckResult]:
     date_str = target_date.isoformat()
     results  = []
 
-    # Unprocessed backlog
-    backlog = sb.table("raw_emails") \
+    # Unprocessed backlog — split into "stuck" and "pending".
+    # process-emails works through a rolling 72h window, so recent unprocessed
+    # emails are normal (they'll be picked up by upcoming runs). Only emails
+    # OLDER than the window are truly stuck and demand attention.
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=72)).isoformat()
+
+    stuck_q = sb.table("raw_emails") \
         .select("id", count="exact") \
         .eq("processed", False) \
+        .lt("received_at", cutoff) \
         .execute()
-    n = backlog.count or 0
+    n_stuck = stuck_q.count or 0
 
-    if n == 0:
-        results.append(CheckResult("pass", "unprocessed backlog", "0 emails pending"))
-    elif n <= 5:
-        results.append(CheckResult("warn", "unprocessed backlog",
-                                   f"{n} email(s) still pending — may be stuck"))
+    pending_q = sb.table("raw_emails") \
+        .select("id", count="exact") \
+        .eq("processed", False) \
+        .gte("received_at", cutoff) \
+        .execute()
+    n_pending = pending_q.count or 0
+
+    if n_stuck == 0:
+        results.append(CheckResult("pass", "stuck backlog (>72h)",
+                                   "0 emails outside the processing window"))
+    elif n_stuck <= 5:
+        results.append(CheckResult("warn", "stuck backlog (>72h)",
+                                   f"{n_stuck} email(s) fell outside the 72h processing window"))
     else:
-        results.append(CheckResult("fail", "unprocessed backlog",
-                                   f"{n} emails stuck — processing failure likely"))
+        results.append(CheckResult("fail", "stuck backlog (>72h)",
+                                   f"{n_stuck} emails outside the 72h processing window — capacity too low or runs failing"))
+
+    results.append(CheckResult("info", "pending (<72h)",
+                               f"{n_pending} unprocessed email(s) inside the rolling window (normal queue)"))
 
     # Emails received today
     today_rows = sb.table("raw_emails") \

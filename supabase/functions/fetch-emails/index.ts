@@ -95,17 +95,18 @@ Deno.serve(async (req) => {
 
     const authHeader = { Authorization: `Bearer ${accessToken}` }
 
-    // ── 2. List inbox messages for today ──────────────────────────────────
-    // The pipeline now runs every day (including weekends), so we query
-    // only emails received on the current calendar day (UTC).
+    // ── 2. List inbox messages for yesterday + today ──────────────────────
+    // The window starts YESTERDAY, not today: emails arriving after the last
+    // fetch of the day (22:00 UTC) used to fall between the daily windows and
+    // were never ingested at all (see backlog-analysis-2026-08-15.md). Starting
+    // a day back closes that gap; gmail_message_id uniqueness deduplicates
+    // everything already saved by a previous run, so re-listing is idempotent.
     // Gmail's after:/before: use YYYY/MM/DD format.
-    // Deduplication via gmail_message_id uniqueness prevents re-saving emails
-    // that were already fetched in a previous run (e.g. morning + afternoon).
     //
     // Optional POST body overrides:
     //   query      — string, fully overrides the Gmail q= parameter
     //                e.g. "in:inbox after:2026/05/12 before:2026/05/14"
-    //   maxResults — integer (1–500), overrides the default 50
+    //   maxResults — integer (1–500), overrides the default 100
     let bodyQuery: string | null = null
     let bodyMaxResults: number | null = null
     try {
@@ -114,14 +115,16 @@ Deno.serve(async (req) => {
       if (typeof body?.maxResults === 'number' && body.maxResults > 0) bodyMaxResults = Math.min(body.maxResults, 500)
     } catch { /* empty body or non-JSON — ignore */ }
 
-    // Build today's date window in Gmail query format (YYYY/MM/DD, UTC)
+    // Build the yesterday→tomorrow window in Gmail query format (YYYY/MM/DD, UTC)
     const now = new Date()
-    const todayStr = now.toISOString().slice(0, 10).replace(/-/g, '/')
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const yesterdayStr = yesterday.toISOString().slice(0, 10).replace(/-/g, '/')
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
     const tomorrowStr = tomorrow.toISOString().slice(0, 10).replace(/-/g, '/')
 
-    const maxResults = bodyMaxResults ?? 50
-    const gmailQuery = bodyQuery ?? `in:inbox after:${todayStr} before:${tomorrowStr}`
+    // Default raised 50 → 100: the window now spans two days of arrivals.
+    const maxResults = bodyMaxResults ?? 100
+    const gmailQuery = bodyQuery ?? `in:inbox after:${yesterdayStr} before:${tomorrowStr}`
 
     const listRes = await fetch(
       `${GMAIL_BASE}/messages?q=${encodeURIComponent(gmailQuery)}&maxResults=${maxResults}`,

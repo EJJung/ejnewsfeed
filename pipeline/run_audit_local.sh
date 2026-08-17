@@ -52,5 +52,11 @@ else
     run "$TODAY" 1
 fi
 
+# Retention: roll daily reports older than 30 days into monthly trend
+# reports (pipeline-audit-trend-YYYY-MM.md) and delete them + old logs.
+echo ""
+echo "--- Pruning old audit reports ---"
+"$PYTHON" prune_audits.py || echo "WARNING: prune_audits.py failed (audit itself succeeded)"
+
 echo ""
 echo "=== Audit finished at $(date) ==="
