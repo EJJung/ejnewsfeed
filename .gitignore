@@ -9,6 +9,7 @@ pipeline/*.pyc
 *.pyc
 *.pyo
 __pycache__/
+.venv/
 
 # Node
 dashboard/node_modules/
@@ -26,3 +27,6 @@ dashboard/.vercel
 logs/
 pipeline-audit-*.md
 pipeline-root-cause-and-fix-plan.md
+
+# Supabase CLI local state
+supabase/.temp/
