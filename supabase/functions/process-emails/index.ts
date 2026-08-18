@@ -222,8 +222,22 @@ Deno.serve(async (req) => {
     .single()
   const runId: string | null = (runRow as { id: string } | null)?.id ?? null
 
-  // Kick off background work and return immediately
-  const work = processAll(supabase, anthropicKey, runId)
+  // Kick off background work and return immediately. Guard against any
+  // uncaught exception from processAll — without this, a throw after the
+  // pipeline_runs row is created leaves it at status='running' forever,
+  // since EdgeRuntime.waitUntil() never surfaces background rejections.
+  const work = processAll(supabase, anthropicKey, runId).catch(async (err) => {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('process-emails fatal error:', err)
+    if (runId) {
+      await supabase
+        .from('pipeline_runs')
+        .update({ completed_at: new Date().toISOString(), status: 'error', error_message: msg })
+        .eq('id', runId)
+    }
+    await sendAlert(supabase, `process-emails crashed: ${msg}`)
+    return { ok: false, error: msg }
+  })
 
   // @ts-ignore — Deno Deploy global
   if (typeof EdgeRuntime !== 'undefined') {
@@ -236,18 +250,11 @@ Deno.serve(async (req) => {
   }
 
   // Local dev: await normally
-  try {
-    const result = await work
-    return new Response(JSON.stringify(result), {
-      headers: { ...CORS, 'Content-Type': 'application/json' },
-    })
-  } catch (err) {
-    console.error('process-emails error:', err)
-    return new Response(JSON.stringify({ ok: false, error: String(err) }), {
-      status: 500,
-      headers: { ...CORS, 'Content-Type': 'application/json' },
-    })
-  }
+  const result = await work
+  return new Response(JSON.stringify(result), {
+    status: result.ok === false ? 500 : 200,
+    headers: { ...CORS, 'Content-Type': 'application/json' },
+  })
 })
 
 // ── Core processing logic ──────────────────────────────────────────────────
@@ -456,17 +463,22 @@ async function processAll(
   // but no summary (caused by a failed run or EdgeRuntime timeout) and backfill
   // those too while we have the budget.
   const sevenDaysAgo = new Date(todayDate.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
-  const [{ data: existingSummaries }, { data: recentArticleDates }] = await Promise.all([
-    supabase.from('daily_summaries').select('date').gte('date', sevenDaysAgo),
-    supabase.from('articles').select('published_at').gte('published_at', `${sevenDaysAgo}T00:00:00Z`),
-  ])
-  const summaryDateSet = new Set((existingSummaries || []).map((s: { date: string }) => s.date))
-  for (const row of (recentArticleDates || [])) {
-    const d = (row as { published_at: string }).published_at?.slice(0, 10)
-    if (d && !summaryDateSet.has(d)) {
-      console.log(`  📋 Gap detected: ${d} has articles but no summary — adding to queue`)
-      affectedDates.add(d)
+  try {
+    const [{ data: existingSummaries }, { data: recentArticleDates }] = await Promise.all([
+      supabase.from('daily_summaries').select('date').gte('date', sevenDaysAgo),
+      supabase.from('articles').select('published_at').gte('published_at', `${sevenDaysAgo}T00:00:00Z`),
+    ])
+    const summaryDateSet = new Set((existingSummaries || []).map((s: { date: string }) => s.date))
+    for (const row of (recentArticleDates || [])) {
+      const d = (row as { published_at: string }).published_at?.slice(0, 10)
+      if (d && !summaryDateSet.has(d)) {
+        console.log(`  📋 Gap detected: ${d} has articles but no summary — adding to queue`)
+        affectedDates.add(d)
+      }
     }
+  } catch (err) {
+    // Best-effort — a failed gap check shouldn't block today's summary generation
+    console.error('  ✗ Gap detection failed:', (err as Error).message)
   }
 
   // Always include today so a summary is generated even if no new emails arrived
@@ -477,9 +489,14 @@ async function processAll(
   let summaryCount = 0
 
   for (const date of datesToSummarise) {
-    summaryCount += await generateDailySummaries(
-      supabase, anthropicKey, categoryList, date, date,
-    )
+    try {
+      summaryCount += await generateDailySummaries(
+        supabase, anthropicKey, categoryList, date, date,
+      )
+    } catch (err) {
+      // Don't let one date's failure (e.g. a Claude API hiccup) block the rest
+      console.error(`  ✗ Summary generation failed for ${date}:`, (err as Error).message)
+    }
   }
 
   const result = {
@@ -567,6 +584,9 @@ Respond ONLY with the JSON array, no markdown, no explanation.`
       max_tokens: 4096,
       messages: [{ role: 'user', content: prompt }],
     }),
+    // Without this, a stalled connection to the Claude API hangs the fetch
+    // indefinitely — no exception is ever thrown, so nothing can catch it.
+    signal: AbortSignal.timeout(45_000),
   })
 
   if (!res.ok) {
@@ -620,6 +640,24 @@ async function generateDailySummaries(
       .limit(20)
 
     if (!articles?.length) continue
+
+    // Skip regeneration if the article set hasn't changed since the last
+    // summary — process-emails runs ~8x/day and would otherwise re-summarize
+    // an unchanged article list (and make an unnecessary Claude call) on
+    // every invocation. Only compare when under the query limit: once a
+    // category hits the cap, count alone can't tell us the top-20 didn't
+    // shift, so we regenerate to stay safe.
+    if (articles.length < 20) {
+      const { data: existing } = await supabase
+        .from('daily_summaries')
+        .select('article_count')
+        .eq('date', endDate)
+        .eq('category_id', category.id)
+        .maybeSingle()
+      if (existing && (existing as { article_count: number }).article_count === articles.length) {
+        continue
+      }
+    }
 
     const bulletList = articles
       .map((a, i) => `${i + 1}. ${a.title}${a.snippet ? ': ' + a.snippet : ''}`)
@@ -688,6 +726,7 @@ Write a concise synthesis paragraph — no bullet points, no headers, just flowi
       max_tokens: 512,
       messages: [{ role: 'user', content: prompt }],
     }),
+    signal: AbortSignal.timeout(45_000),
   })
 
   if (!res.ok) {
