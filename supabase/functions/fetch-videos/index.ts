@@ -118,7 +118,7 @@ interface FeedEntry {
   publishedAt: string
 }
 
-async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sources_polled: number; videos_inserted: number }> {
+async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sources_polled: number; videos_inserted: number; videos_failed: number }> {
   const { data: sources, error } = await supabase
     .from('sources')
     .select('id, youtube_channel_id, min_duration_seconds, last_polled_at')
@@ -131,19 +131,31 @@ async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sou
   const settled = await Promise.allSettled(rows.map((source) => pollOneChannel(supabase, source)))
 
   let videosInserted = 0
+  let videosFailed = 0
+  let sourcesWithFailures = 0
   for (let i = 0; i < settled.length; i++) {
     const s = settled[i]
     if (s.status === 'fulfilled') {
-      videosInserted += s.value
+      videosInserted += s.value.inserted
+      videosFailed += s.value.failed
+      if (s.value.failed > 0) sourcesWithFailures++
     } else {
       console.error(`  ✗ Error polling source ${rows[i].id}: ${s.reason}`)
     }
   }
 
-  return { sources_polled: rows.length, videos_inserted: videosInserted }
+  if (videosFailed > 0) {
+    await sendAlert(
+      supabase,
+      'fetch-videos',
+      `fetch-videos poll completed with ${videosFailed} insert failure(s) across ${sourcesWithFailures} source(s) — check Edge Function logs`,
+    )
+  }
+
+  return { sources_polled: rows.length, videos_inserted: videosInserted, videos_failed: videosFailed }
 }
 
-async function pollOneChannel(supabase: ReturnType<typeof createClient>, source: SourceRow): Promise<number> {
+async function pollOneChannel(supabase: ReturnType<typeof createClient>, source: SourceRow): Promise<{ inserted: number; failed: number }> {
   const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${source.youtube_channel_id}`
   const res = await fetch(feedUrl, { signal: AbortSignal.timeout(15_000) })
   if (!res.ok) throw new Error(`RSS fetch failed for ${source.youtube_channel_id}: ${res.status}`)
@@ -151,20 +163,31 @@ async function pollOneChannel(supabase: ReturnType<typeof createClient>, source:
   const xml = await res.text()
   const entries = parseYouTubeFeed(xml)
 
-  let inserted = await insertNewVideos(supabase, source.id, entries)
+  const rssResult = await insertNewVideos(supabase, source.id, entries)
+  let inserted = rssResult.inserted
+  let failed = rssResult.failed
 
   // Overflow check: a full 15-entry window whose oldest item is still newer
   // than our last poll means the window didn't reach back far enough —
   // some uploads between last_polled_at and now may have been missed.
   const oldest = entries.length ? entries[entries.length - 1] : null
-  if (entries.length >= 15 && oldest && source.last_polled_at && new Date(oldest.publishedAt) > new Date(source.last_polled_at)) {
-    const backfilled = await backfillViaDataApi(supabase, source)
-    inserted += backfilled
+  const overflowSuspected = entries.length >= 15 && oldest && source.last_polled_at && new Date(oldest.publishedAt) > new Date(source.last_polled_at)
+
+  let backfillOk = true
+  if (overflowSuspected) {
+    const backfillResult = await backfillViaDataApi(supabase, source)
+    inserted += backfillResult.inserted
+    failed += backfillResult.failed
+    backfillOk = backfillResult.ok
   }
 
-  await supabase.from('sources').update({ last_polled_at: new Date().toISOString() }).eq('id', source.id)
+  if (!overflowSuspected || backfillOk) {
+    await supabase.from('sources').update({ last_polled_at: new Date().toISOString() }).eq('id', source.id)
+  } else {
+    console.error(`  ✗ Overflow backfill failed for source ${source.id} — leaving last_polled_at unchanged so recovery is retried on the next poll`)
+  }
 
-  return inserted
+  return { inserted, failed }
 }
 
 // Parses a YouTube channel Atom feed. NOTE: fast-xml-parser's exact output
@@ -191,8 +214,9 @@ function parseYouTubeFeed(xml: string): FeedEntry[] {
   }).filter((e) => e.videoId)
 }
 
-async function insertNewVideos(supabase: ReturnType<typeof createClient>, sourceId: string, entries: FeedEntry[]): Promise<number> {
+async function insertNewVideos(supabase: ReturnType<typeof createClient>, sourceId: string, entries: FeedEntry[]): Promise<{ inserted: number; failed: number }> {
   let inserted = 0
+  let failed = 0
   for (const entry of entries) {
     const { error } = await supabase.from('raw_videos').insert({
       youtube_video_id: entry.videoId,
@@ -208,23 +232,25 @@ async function insertNewVideos(supabase: ReturnType<typeof createClient>, source
     // video — that's expected steady-state behavior, not a failure.
     if (!error) inserted++
     else if (!error.message.includes('duplicate key')) {
+      failed++
       console.error(`  ✗ Failed to insert video ${entry.videoId}: ${error.message}`)
     }
   }
-  return inserted
+  return { inserted, failed }
 }
 
-async function backfillViaDataApi(supabase: ReturnType<typeof createClient>, source: SourceRow): Promise<number> {
+async function backfillViaDataApi(supabase: ReturnType<typeof createClient>, source: SourceRow): Promise<{ inserted: number; failed: number; ok: boolean }> {
   const apiKey = Deno.env.get('YOUTUBE_DATA_API_KEY')
   if (!apiKey) {
     console.error(`  ✗ Overflow detected for source ${source.id} but YOUTUBE_DATA_API_KEY is not set — skipping backfill`)
-    return 0
+    return { inserted: 0, failed: 0, ok: false }
   }
 
   const uploadsPlaylistId = 'UU' + source.youtube_channel_id.slice(2)
   const lastPolled = source.last_polled_at ? new Date(source.last_polled_at) : null
 
   let inserted = 0
+  let failed = 0
   let pageToken: string | undefined
   for (let page = 0; page < 5; page++) {
     const url = new URL('https://www.googleapis.com/youtube/v3/playlistItems')
@@ -237,7 +263,7 @@ async function backfillViaDataApi(supabase: ReturnType<typeof createClient>, sou
     const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
     if (!res.ok) {
       console.error(`  ✗ playlistItems backfill failed for ${source.id}: ${res.status}`)
-      break
+      return { inserted, failed, ok: false }
     }
     const data = await res.json()
     const items = (data.items || []) as Array<{ contentDetails: { videoId: string }; snippet: { title: string; description: string; publishedAt: string; thumbnails?: { default?: { url: string } } } }>
@@ -249,14 +275,16 @@ async function backfillViaDataApi(supabase: ReturnType<typeof createClient>, sou
       thumbnailUrl: item.snippet.thumbnails?.default?.url ?? null,
       publishedAt: item.snippet.publishedAt,
     }))
-    inserted += await insertNewVideos(supabase, source.id, entries)
+    const pageResult = await insertNewVideos(supabase, source.id, entries)
+    inserted += pageResult.inserted
+    failed += pageResult.failed
 
     const oldestOnPage = items.length ? new Date(items[items.length - 1].snippet.publishedAt) : null
     pageToken = data.nextPageToken
     if (!pageToken || !oldestOnPage || (lastPolled && oldestOnPage <= lastPolled)) break
   }
 
-  return inserted
+  return { inserted, failed, ok: true }
 }
 
 // ── Enrich mode (Task 4) ─────────────────────────────────────────────────
