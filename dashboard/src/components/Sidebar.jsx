@@ -16,6 +16,7 @@ export default function Sidebar({ categories = [], savedCount, onClose, isAdmin 
     if (key === 'briefing') navigate('/briefing')
     else if (key === 'saved') navigate('/saved')
     else if (key === 'trends') navigate('/trends')
+    else if (key === 'knowledge') navigate('/knowledge')
     else if (key === 'admin') navigate('/admin')
     else navigate(`/category/${key}`)
   }
@@ -83,6 +84,17 @@ export default function Sidebar({ categories = [], savedCount, onClose, isAdmin 
           icon={
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
+            </svg>
+          }
+        />
+
+        <NavItem
+          label="Knowledge"
+          isActive={activeNav === 'knowledge'}
+          onClick={() => handleNav('knowledge')}
+          icon={
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
             </svg>
           }
         />
