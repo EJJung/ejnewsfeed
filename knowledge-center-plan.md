@@ -59,14 +59,14 @@ Stack stays: Supabase (Postgres + Edge Functions + Storage + pg_cron), React/Vit
 
 ## 3. Phases
 
-### Phase 0 — Stabilize the pipeline (this week)
+### Phase 0 — Stabilize the pipeline (this week) — ✅ COMPLETE (2026-08-18/19)
 
 The Aug 15 backlog fixes are committed but not deployed. Nothing new gets built on an unhealthy pipeline.
 
-1. `supabase functions deploy process-emails fetch-emails` from repo root
-2. Run `supabase/triage_stale_backlog.sql` in the SQL Editor
-3. Re-copy the launchd plist and `launchctl unload/load` (loaded copy is stale — audits fire 8:12 AM instead of 11 AM)
-4. Success: daily audits show stuck backlog = 0, pending < ~30, for one full week
+1. ✅ `supabase functions deploy process-emails fetch-emails` from repo root
+2. ✅ Ran `supabase/triage_stale_backlog.sql` — stuck backlog dropped from 998 (Aug 14) to 0
+3. ✅ Re-copied the launchd plist and reloaded — audits now fire at 11 AM, not 8:12 AM
+4. Success target was stuck=0 / pending<~30 for one full week. Declared done early after finding and fixing the actual remaining defect: `process-emails` did Claude extraction and summary generation sequentially per email/category, so runs regularly exceeded the 5-minute EdgeRuntime ceiling and got killed by the stale-run watchdog (~half of all invocations). Parallelized extraction, article saves, and summary generation (`Promise.allSettled`), which cut run time from 2–5+ min to ~50s, and raised the per-run batch cap 4→8. Commit `6d49537`, deployed and verified live (backlog 33→23 pending in one afternoon, 0 stuck). Ongoing health should still be watched via the daily audits, but the root cause is fixed and the pipeline no longer needs babysitting to proceed to Phase 1.
 
 ### Phase 1 — Knowledge layer + multi-source ingestion (~2–3 weeks)
 
