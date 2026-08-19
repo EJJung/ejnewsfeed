@@ -311,10 +311,12 @@ async function runEnrich(supabase: ReturnType<typeof createClient>): Promise<{ e
 
   if (!rows.length) return { enriched: 0, too_short: 0, errored: 0 }
 
-  const { data: sources } = await supabase
+  const { data: sources, error: sourcesErr } = await supabase
     .from('sources')
     .select('id, min_duration_seconds')
     .eq('source_type', 'youtube')
+
+  if (sourcesErr) throw new Error(`Failed to load source duration thresholds: ${sourcesErr.message}`)
   const minDurationBySource = new Map(
     ((sources || []) as Array<{ id: string; min_duration_seconds: number }>).map((s) => [s.id, s.min_duration_seconds]),
   )
