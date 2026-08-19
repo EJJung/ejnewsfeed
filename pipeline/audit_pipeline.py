@@ -393,13 +393,71 @@ def audit_summarization(target_date: date, lookback_days: int) -> list[CheckResu
     return results
 
 
+# ── Stage 5: Insight Distillation ────────────────────────────────────────────
+
+def audit_insight_distillation(target_date: date, lookback_days: int) -> list[CheckResult]:
+    date_str = target_date.isoformat()
+    results  = []
+
+    # Candidate insights created on the target date
+    candidates = sb.table("insights") \
+        .select("id, domains, status") \
+        .eq("first_seen_at", date_str) \
+        .execute()
+    n_candidates = len(candidates.data or [])
+    results.append(CheckResult(
+        "info", f"candidate insights ({date_str})",
+        f"{n_candidates} candidate(s) extracted"
+    ))
+
+    # Active insight count per domain
+    active = sb.table("insights") \
+        .select("domains") \
+        .eq("status", "active") \
+        .execute()
+    domain_counts: dict[str, int] = {}
+    for row in (active.data or []):
+        for d in (row.get("domains") or []):
+            domain_counts[d] = domain_counts.get(d, 0) + 1
+    if domain_counts:
+        breakdown = "  ".join(f"{k}={v}" for k, v in sorted(domain_counts.items()))
+        results.append(CheckResult("info", "active insights by domain", breakdown))
+    else:
+        results.append(CheckResult("info", "active insights by domain", "none yet"))
+
+    # Weekly job freshness
+    last_weekly = sb.table("pipeline_runs") \
+        .select("started_at, status, metadata") \
+        .eq("job_name", "distill-insights") \
+        .order("started_at", desc=True) \
+        .limit(20) \
+        .execute()
+    weekly_runs = [r for r in (last_weekly.data or []) if (r.get("metadata") or {}).get("mode") == "weekly"]
+
+    if not weekly_runs:
+        results.append(CheckResult("info", "weekly distillation", "no weekly runs yet"))
+    else:
+        last_run = weekly_runs[0]
+        last_date = date.fromisoformat(last_run["started_at"][:10])
+        days_since = (target_date - last_date).days
+        if days_since > 8:
+            results.append(CheckResult("warn", "weekly distillation",
+                                       f"last run {days_since}d ago ({last_run['status']}) — expected weekly"))
+        else:
+            results.append(CheckResult("pass", "weekly distillation",
+                                       f"last run {days_since}d ago, status={last_run['status']}"))
+
+    return results
+
+
 # ── Main report ────────────────────────────────────────────────────────────────
 
 STAGES = [
-    ("Stage 1 — Email Fetch",      audit_email_fetch),
-    ("Stage 2 — Article Parsing",  audit_article_parsing),
-    ("Stage 3 — Article Scoring",  audit_article_scoring),
-    ("Stage 4 — Summarization",    audit_summarization),
+    ("Stage 1 — Email Fetch",         audit_email_fetch),
+    ("Stage 2 — Article Parsing",     audit_article_parsing),
+    ("Stage 3 — Article Scoring",     audit_article_scoring),
+    ("Stage 4 — Summarization",       audit_summarization),
+    ("Stage 5 — Insight Distillation", audit_insight_distillation),
 ]
 
 
