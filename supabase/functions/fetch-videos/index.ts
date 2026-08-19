@@ -287,10 +287,69 @@ async function backfillViaDataApi(supabase: ReturnType<typeof createClient>, sou
   return { inserted, failed, ok: true }
 }
 
-// ── Enrich mode (Task 4) ─────────────────────────────────────────────────
+// ── Enrich mode ──────────────────────────────────────────────────────────
 
-async function runEnrich(_supabase: ReturnType<typeof createClient>): Promise<Record<string, unknown>> {
-  throw new Error('enrich mode not implemented yet')
+function parseISO8601Duration(iso: string): number {
+  const match = iso.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/)
+  if (!match) return 0
+  const [, h, m, s] = match
+  return (parseInt(h || '0', 10) * 3600) + (parseInt(m || '0', 10) * 60) + parseInt(s || '0', 10)
+}
+
+async function runEnrich(supabase: ReturnType<typeof createClient>): Promise<{ enriched: number; too_short: number; errored: number }> {
+  const apiKey = Deno.env.get('YOUTUBE_DATA_API_KEY')
+  if (!apiKey) throw new Error('YOUTUBE_DATA_API_KEY is not set')
+
+  const { data: pending, error: pendingErr } = await supabase
+    .from('raw_videos')
+    .select('id, youtube_video_id, source_id')
+    .eq('status', 'pending')
+    .limit(50)
+
+  if (pendingErr) throw new Error(`Failed to load pending videos: ${pendingErr.message}`)
+  const rows = (pending || []) as Array<{ id: string; youtube_video_id: string; source_id: string | null }>
+
+  if (!rows.length) return { enriched: 0, too_short: 0, errored: 0 }
+
+  const { data: sources } = await supabase
+    .from('sources')
+    .select('id, min_duration_seconds')
+    .eq('source_type', 'youtube')
+  const minDurationBySource = new Map(
+    ((sources || []) as Array<{ id: string; min_duration_seconds: number }>).map((s) => [s.id, s.min_duration_seconds]),
+  )
+
+  const ids = rows.map((r) => r.youtube_video_id).join(',')
+  const url = new URL('https://www.googleapis.com/youtube/v3/videos')
+  url.searchParams.set('part', 'contentDetails,snippet')
+  url.searchParams.set('id', ids)
+  url.searchParams.set('key', apiKey)
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(15_000) })
+  if (!res.ok) throw new Error(`videos.list failed: ${res.status} ${await res.text()}`)
+  const data = await res.json()
+  const items = (data.items || []) as Array<{ id: string; contentDetails: { duration: string } }>
+  const durationByVideoId = new Map(items.map((item) => [item.id, parseISO8601Duration(item.contentDetails.duration)]))
+
+  let enriched = 0, tooShort = 0, errored = 0
+  for (const row of rows) {
+    const duration = durationByVideoId.get(row.youtube_video_id)
+    if (duration === undefined) {
+      await supabase.from('raw_videos').update({ status: 'error', error_message: 'video not found via Data API (deleted or private)' }).eq('id', row.id)
+      errored++
+      continue
+    }
+    const minDuration = (row.source_id && minDurationBySource.get(row.source_id)) ?? 300
+    if (duration < minDuration) {
+      await supabase.from('raw_videos').update({ status: 'too_short', duration_seconds: duration }).eq('id', row.id)
+      tooShort++
+    } else {
+      await supabase.from('raw_videos').update({ status: 'enriched', duration_seconds: duration }).eq('id', row.id)
+      enriched++
+    }
+  }
+
+  return { enriched, too_short: tooShort, errored }
 }
 
 // ── Transcribe mode (Task 5) ─────────────────────────────────────────────
