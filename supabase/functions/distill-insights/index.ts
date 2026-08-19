@@ -295,11 +295,197 @@ No markdown, no explanation — raw JSON only.`
   }
 }
 
-// ── Weekly mode (Task 3) ─────────────────────────────────────────────────────
+// ── Weekly mode ──────────────────────────────────────────────────────────
+
+interface WeeklyDecision {
+  promote: string[]
+  merge: { candidate_id: string; into_insight_id: string }[]
+  contest: { candidate_id: string; conflicts_with_insight_id: string }[]
+  reject: string[]
+}
+
+interface InsightRow {
+  id: string
+  text: string
+  status: string
+  confidence?: number
+}
 
 async function runWeekly(
-  _supabase: ReturnType<typeof createClient>,
-  _anthropicKey: string,
-): Promise<Record<string, unknown>> {
-  throw new Error('weekly mode not implemented yet')
+  supabase: ReturnType<typeof createClient>,
+  anthropicKey: string,
+): Promise<Record<string, { promoted: number; merged: number; contested: number; rejected: number }>> {
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+
+  const settled = await Promise.allSettled(
+    DOMAINS.map(async (domain) => {
+      const categoryName = DOMAIN_TO_CATEGORY[domain]
+
+      const { data: candidateRows } = await supabase
+        .from('insights')
+        .select('id, text, status, confidence')
+        .eq('status', 'candidate')
+        .contains('domains', [domain])
+        .gte('first_seen_at', sevenDaysAgo)
+
+      const candidates = (candidateRows || []) as InsightRow[]
+      if (!candidates.length) return { domain, promoted: 0, merged: 0, contested: 0, rejected: 0 }
+
+      const { data: existingRows } = await supabase
+        .from('insights')
+        .select('id, text, status')
+        .in('status', ['active', 'contested'])
+        .contains('domains', [domain])
+        .order('created_at', { ascending: false })
+        .limit(50)
+
+      const existing = (existingRows || []) as InsightRow[]
+
+      const decision = await classifyCandidates(anthropicKey, categoryName, candidates, existing)
+      const counts = await applyWeeklyDecision(supabase, decision, todayISO)
+      console.log(`  ✓ ${domain}: promoted=${counts.promoted} merged=${counts.merged} contested=${counts.contested} rejected=${counts.rejected}`)
+      return { domain, ...counts }
+    }),
+  )
+
+  const results: Record<string, { promoted: number; merged: number; contested: number; rejected: number }> = {}
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i]
+    if (s.status === 'fulfilled') {
+      results[s.value.domain] = { promoted: s.value.promoted, merged: s.value.merged, contested: s.value.contested, rejected: s.value.rejected }
+    } else {
+      console.error(`  ✗ Error processing domain ${DOMAINS[i]}: ${s.reason}`)
+      results[DOMAINS[i]] = { promoted: 0, merged: 0, contested: 0, rejected: 0 }
+    }
+  }
+  return results
+}
+
+async function classifyCandidates(
+  apiKey: string,
+  categoryName: string,
+  candidates: InsightRow[],
+  existing: InsightRow[],
+): Promise<WeeklyDecision> {
+  const existingBlock = existing.length
+    ? existing.map((e) => `[${e.id}] (${e.status}) ${e.text}`).join('\n')
+    : '(none yet)'
+  const candidateBlock = candidates
+    .map((c) => `[${c.id}] ${c.text} (confidence ${c.confidence ?? 'n/a'})`)
+    .join('\n')
+
+  const prompt = `You are curating a knowledge base of durable insights for ${categoryName}. Compare this week's newly extracted candidate insights against the currently active/contested insights, and classify each candidate.
+
+Existing active/contested insights:
+${existingBlock}
+
+This week's candidates:
+${candidateBlock}
+
+For each candidate, decide exactly one:
+- "promote": genuinely new, distinct, and well-supported enough to become an active insight
+- "merge": restates or reinforces an existing insight — merge as additional evidence (needs into_insight_id from the existing list)
+- "contest": conflicts with / contradicts an existing insight (needs conflicts_with_insight_id from the existing list)
+- "reject": too weak, too narrow, or not durable enough to keep
+
+Return ONLY a JSON object:
+{
+  "promote": ["candidate_id", ...],
+  "merge": [{"candidate_id": "...", "into_insight_id": "..."}],
+  "contest": [{"candidate_id": "...", "conflicts_with_insight_id": "..."}],
+  "reject": ["candidate_id", ...]
+}
+Every candidate id must appear in exactly one bucket, using ids exactly as given in brackets above. No markdown, no explanation.`
+
+  const res = await fetch(CLAUDE_API, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 2048,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+    signal: AbortSignal.timeout(45_000),
+  })
+
+  if (!res.ok) {
+    const errBody = await res.text()
+    throw new Error(`Claude API error ${res.status}: ${errBody}`)
+  }
+
+  const data = await res.json()
+  const rawText = (data.content?.[0]?.text || '').trim()
+  const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+  const parsed = JSON.parse(cleaned) as Partial<WeeklyDecision>
+
+  const decision: WeeklyDecision = {
+    promote: parsed.promote || [],
+    merge: parsed.merge || [],
+    contest: parsed.contest || [],
+    reject: parsed.reject || [],
+  }
+
+  // Any candidate Claude didn't classify is treated as rejected, not silently dropped.
+  const classifiedIds = new Set([
+    ...decision.promote,
+    ...decision.merge.map((m) => m.candidate_id),
+    ...decision.contest.map((c) => c.candidate_id),
+    ...decision.reject,
+  ])
+  for (const c of candidates) {
+    if (!classifiedIds.has(c.id)) decision.reject.push(c.id)
+  }
+
+  return decision
+}
+
+async function applyWeeklyDecision(
+  supabase: ReturnType<typeof createClient>,
+  decision: WeeklyDecision,
+  todayISO: string,
+): Promise<{ promoted: number; merged: number; contested: number; rejected: number }> {
+  let promoted = 0, merged = 0, contested = 0, rejected = 0
+
+  if (decision.promote.length) {
+    const { error } = await supabase.from('insights').update({ status: 'active', updated_at: new Date().toISOString() }).in('id', decision.promote)
+    if (!error) promoted = decision.promote.length
+  }
+
+  for (const { candidate_id, into_insight_id } of decision.merge) {
+    const { data: sources } = await supabase.from('insight_sources').select('article_id, relation').eq('insight_id', candidate_id)
+    for (const src of (sources || []) as { article_id: string; relation: string }[]) {
+      await supabase.from('insight_sources').upsert(
+        { insight_id: into_insight_id, article_id: src.article_id, relation: 'supporting' },
+        { onConflict: 'insight_id,article_id' },
+      )
+    }
+    await supabase.from('insights').update({ status: 'superseded', superseded_by: into_insight_id, updated_at: new Date().toISOString() }).eq('id', candidate_id)
+    await supabase.from('insights').update({ last_confirmed_at: todayISO, updated_at: new Date().toISOString() }).eq('id', into_insight_id)
+    merged++
+  }
+
+  for (const { candidate_id, conflicts_with_insight_id } of decision.contest) {
+    const { data: sources } = await supabase.from('insight_sources').select('article_id').eq('insight_id', candidate_id)
+    for (const src of (sources || []) as { article_id: string }[]) {
+      await supabase.from('insight_sources').upsert(
+        { insight_id: conflicts_with_insight_id, article_id: src.article_id, relation: 'contradicting' },
+        { onConflict: 'insight_id,article_id' },
+      )
+    }
+    await supabase.from('insights').update({ status: 'contested', updated_at: new Date().toISOString() }).eq('id', conflicts_with_insight_id)
+    await supabase.from('insights').update({ status: 'superseded', superseded_by: conflicts_with_insight_id, updated_at: new Date().toISOString() }).eq('id', candidate_id)
+    contested++
+  }
+
+  if (decision.reject.length) {
+    const { error } = await supabase.from('insights').update({ status: 'rejected', updated_at: new Date().toISOString() }).in('id', decision.reject)
+    if (!error) rejected = decision.reject.length
+  }
+
+  return { promoted, merged, contested, rejected }
 }
