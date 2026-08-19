@@ -399,10 +399,13 @@ def audit_insight_distillation(target_date: date, lookback_days: int) -> list[Ch
     date_str = target_date.isoformat()
     results  = []
 
-    # Candidate insights created on the target date
+    # Candidate insights created on the target date (still awaiting weekly
+    # classification — filtered to status='candidate' so a weekly run that
+    # has since reclassified some of these rows doesn't inflate the count).
     candidates = sb.table("insights") \
         .select("id, domains, status") \
         .eq("first_seen_at", date_str) \
+        .eq("status", "candidate") \
         .execute()
     n_candidates = len(candidates.data or [])
     results.append(CheckResult(

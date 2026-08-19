@@ -13,6 +13,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { sendAlert } from '../_shared/alert.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -48,35 +49,21 @@ interface CandidateInsight {
   source_indices: number[]
 }
 
-// ── Alert helper (same pattern as process-emails) ───────────────────────────
-async function sendAlert(supabase: ReturnType<typeof createClient>, message: string): Promise<void> {
-  try {
-    const { data } = await supabase
-      .from('_pipeline_config')
-      .select('value')
-      .eq('key', 'alert_webhook_url')
-      .maybeSingle()
-    const url = (data as { value?: string } | null)?.value?.trim()
-    if (!url) return
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        title: '🚨 EJ Newsfeed Pipeline Error',
-        message,
-        job: 'distill-insights',
-        timestamp: new Date().toISOString(),
-      }),
-    })
-  } catch { /* best-effort */ }
-}
-
 // ── Main handler ───────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
-  const { mode } = await req.json() as { mode: Mode }
+  let mode: Mode
+  try {
+    const body = await req.json()
+    mode = body.mode
+  } catch {
+    return new Response(JSON.stringify({ ok: false, error: 'invalid JSON body' }), {
+      status: 400,
+      headers: { ...CORS, 'Content-Type': 'application/json' },
+    })
+  }
   if (mode !== 'daily' && mode !== 'weekly') {
     return new Response(JSON.stringify({ ok: false, error: 'mode must be "daily" or "weekly"' }), {
       status: 400,
@@ -119,7 +106,7 @@ Deno.serve(async (req) => {
           metadata: { mode },
         }).eq('id', runId)
       }
-      await sendAlert(supabase, `distill-insights (${mode}) crashed: ${msg}`)
+      await sendAlert(supabase, 'distill-insights', `distill-insights (${mode}) crashed: ${msg}`)
       return { ok: false, error: msg }
     })
 
@@ -267,7 +254,7 @@ No markdown, no explanation — raw JSON only.`
 
     let dropped = 0
     const validated: CandidateInsight[] = []
-    for (const c of rawCandidates.slice(0, 3)) {
+    for (const c of rawCandidates) {
       const item = c as Partial<CandidateInsight> | null | undefined
       const text = item?.text
       const confidence = item?.confidence
@@ -288,7 +275,7 @@ No markdown, no explanation — raw JSON only.`
       console.error(`Dropped ${dropped} candidate insight(s) with invalid shape from Claude response`)
     }
 
-    return validated
+    return validated.slice(0, 3)
   } catch {
     console.error('Failed to parse Claude extraction JSON:', rawText.slice(0, 300))
     return []
@@ -316,18 +303,29 @@ async function runWeekly(
   anthropicKey: string,
 ): Promise<Record<string, { promoted: number; merged: number; contested: number; rejected: number }>> {
   const todayISO = new Date().toISOString().slice(0, 10)
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
+  // NOTE: domains are processed concurrently below. This is safe today because
+  // runDaily only ever writes single-element `domains` arrays (an insight
+  // belongs to exactly one domain at creation time), so no two concurrent
+  // domain branches touch the same insight row. The schema allows multi-domain
+  // insights (`domains TEXT[]`); if a future phase ever creates one, revisit
+  // this concurrency model (e.g. serialize or lock per-insight) to avoid two
+  // domain branches racing to update the same row in one run.
   const settled = await Promise.allSettled(
     DOMAINS.map(async (domain) => {
       const categoryName = DOMAIN_TO_CATEGORY[domain]
 
+      // No time-window filter here: any status='candidate' row is fair game,
+      // so a skipped weekly run never orphans the prior week's candidates.
+      // Capped and ordered oldest-first to bound prompt size and drain the
+      // backlog in order, matching the `existing`-insights query's own cap.
       const { data: candidateRows } = await supabase
         .from('insights')
         .select('id, text, status, confidence')
         .eq('status', 'candidate')
         .contains('domains', [domain])
-        .gte('first_seen_at', sevenDaysAgo)
+        .order('first_seen_at', { ascending: true })
+        .limit(50)
 
       const candidates = (candidateRows || []) as InsightRow[]
       if (!candidates.length) return { domain, promoted: 0, merged: 0, contested: 0, rejected: 0 }
@@ -429,6 +427,28 @@ Every candidate id must appear in exactly one bucket, using ids exactly as given
     contest: parsed.contest || [],
     reject: parsed.reject || [],
   }
+
+  // De-duplicate across buckets in case Claude puts the same candidate id in
+  // more than one bucket. Priority order: promote > merge > contest > reject —
+  // once an id is claimed by a higher-priority bucket, drop it from the rest,
+  // so each candidate is processed (and counted) at most once.
+  const seen = new Set<string>()
+  for (const id of decision.promote) seen.add(id)
+  decision.merge = decision.merge.filter((m) => {
+    if (seen.has(m.candidate_id)) return false
+    seen.add(m.candidate_id)
+    return true
+  })
+  decision.contest = decision.contest.filter((c) => {
+    if (seen.has(c.candidate_id)) return false
+    seen.add(c.candidate_id)
+    return true
+  })
+  decision.reject = decision.reject.filter((id) => {
+    if (seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
 
   // Any candidate Claude didn't classify is treated as rejected, not silently dropped.
   const classifiedIds = new Set([
