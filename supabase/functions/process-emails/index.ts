@@ -305,10 +305,13 @@ async function processAll(
     .eq('processed', false)
     .gte('received_at', windowStart)
     .order('received_at', { ascending: true }) // oldest-first so spillover clears before new arrivals
-    .limit(4) // 4 per run × 8 daily invocations ≈ 32/day capacity vs ~25–30 arrivals.
-              // (2 starved the queue; 5 hit the 150s EdgeRuntime timeout. Articles are
-              // saved before summaries, and the summary-guarantee pass backfills any
-              // summaries dropped if the budget runs out.)
+    .limit(8) // 8 per run × 8 daily invocations ≈ 64/day capacity vs ~25–30 arrivals,
+              // enough headroom to also drain the existing backlog. Extraction and
+              // summary generation now run concurrently (Promise.allSettled) rather
+              // than sequentially, so a larger batch no longer stacks against the
+              // 5-minute EdgeRuntime ceiling the way it did before — worst case is
+              // still ~1 slowest-Claude-call-per-phase, not sum-of-all-calls. The
+              // real ceiling now is Claude API concurrency/rate limits, not runtime.
 
   if (emailErr) {
     const msg = `Failed to fetch raw_emails: ${emailErr.message}`
@@ -328,11 +331,12 @@ async function processAll(
   const affectedDates = new Set<string>()
 
   // ── Phase 1: Extract articles from every email ──────────────────────────
-  // Collect everything before computing reach scores (which need the full set).
-  const extractionResults: Array<{ articles: ScoredArticle[]; email: RawEmail }> = []
-
-  for (const email of rawEmails) {
-    try {
+  // Each email's extraction is independent, so run them concurrently — bounded
+  // by whichever single Claude call is slowest, instead of their sum. Sequential
+  // awaits here (up to 4 × 45s) were the main reason runs blew past the 5-minute
+  // EdgeRuntime background ceiling and got killed by the stale-run watchdog.
+  const extractionSettled = await Promise.allSettled(
+    rawEmails.map(async (email) => {
       const bodyText = email.raw_html
         ? htmlToText(email.raw_html)
         : (email.raw_text || '').slice(0, 12000).trim()
@@ -340,7 +344,7 @@ async function processAll(
       if (!bodyText) {
         console.log(`  ⚠ Skipping empty email: ${email.subject?.slice(0, 60)}`)
         await supabase.from('raw_emails').update({ processed: true }).eq('id', email.id)
-        continue
+        return null
       }
 
       const extracted = await extractArticles(
@@ -354,7 +358,7 @@ async function processAll(
       if (!extracted.length) {
         console.log(`  – No articles found in: ${email.subject?.slice(0, 60)}`)
         await supabase.from('raw_emails').update({ processed: true }).eq('id', email.id)
-        continue
+        return null
       }
 
       const scored: ScoredArticle[] = extracted.map((a) => ({
@@ -362,12 +366,21 @@ async function processAll(
         _source_id: email.source_id,
         _impact_score: 0.5,
       }))
-      extractionResults.push({ articles: scored, email })
       console.log(
         `  → Extracted ${extracted.length} from: ${email.subject?.slice(0, 50)}`,
       )
-    } catch (err) {
-      console.error(`  ✗ Error extracting email ${email.id}: ${err}`)
+      return { articles: scored, email }
+    }),
+  )
+
+  // Collect everything before computing reach scores (which need the full set).
+  const extractionResults: Array<{ articles: ScoredArticle[]; email: RawEmail }> = []
+  for (let i = 0; i < extractionSettled.length; i++) {
+    const settled = extractionSettled[i]
+    if (settled.status === 'fulfilled') {
+      if (settled.value) extractionResults.push(settled.value)
+    } else {
+      console.error(`  ✗ Error extracting email ${rawEmails[i].id}: ${settled.reason}`)
     }
   }
 
@@ -411,8 +424,12 @@ async function processAll(
   }
 
   // ── Phase 3: Save articles and mark emails processed ───────────────────
-  for (const { articles, email } of extractionResults) {
-    try {
+  // Each email's articles are independent DB writes — run the emails concurrently.
+  const saveSettled = await Promise.allSettled(
+    extractionResults.map(async ({ articles, email }) => {
+      let savedCount = 0
+      const savedDates: string[] = []
+
       for (const article of articles) {
         const catId = resolveCategoryId(categoryList, article.category)
         const publishedAt = sanitisePublishedAt(article.published_at, email.received_at)
@@ -437,20 +454,30 @@ async function processAll(
           if (insertErr) {
             console.error(`  ✗ Article insert failed for "${article.title}":`, JSON.stringify(insertErr))
           } else {
-            totalArticlesSaved++
-            affectedDates.add(publishedAt.slice(0, 10))
+            savedCount++
+            savedDates.push(publishedAt.slice(0, 10))
           }
         } catch (e) {
           console.error(`  ✗ Article insert exception for "${article.title}":`, (e as Error).message)
         }
       }
 
+      // If this throws, the promise rejects and the email is left processed=false
+      // (see the 'rejected' branch below) so it retries next run.
       await supabase.from('raw_emails').update({ processed: true }).eq('id', email.id)
-      processedEmailIds.push(email.id)
       console.log(`  ✓ Saved ${articles.length} from: ${email.subject?.slice(0, 50)}`)
-    } catch (err) {
+      return { emailId: email.id, savedCount, savedDates }
+    }),
+  )
+
+  for (const settled of saveSettled) {
+    if (settled.status === 'fulfilled') {
+      totalArticlesSaved += settled.value.savedCount
+      processedEmailIds.push(settled.value.emailId)
+      for (const d of settled.value.savedDates) affectedDates.add(d)
+    } else {
       // Leave processed=false so it will retry next run
-      console.error(`  ✗ Error saving email ${email.id}: ${err}`)
+      console.error(`  ✗ Error saving email: ${settled.reason}`)
     }
   }
 
@@ -486,16 +513,21 @@ async function processAll(
   const datesToSummarise = new Set([todayISO, ...affectedDates])
   console.log(`Generating summaries for: ${[...datesToSummarise].sort().join(', ')}`)
 
-  let summaryCount = 0
+  // Each date's summaries are independent — generate them concurrently rather
+  // than blocking one date's Claude calls on another's.
+  const datesArray = [...datesToSummarise]
+  const summarySettled = await Promise.allSettled(
+    datesArray.map((date) => generateDailySummaries(supabase, anthropicKey, categoryList, date, date)),
+  )
 
-  for (const date of datesToSummarise) {
-    try {
-      summaryCount += await generateDailySummaries(
-        supabase, anthropicKey, categoryList, date, date,
-      )
-    } catch (err) {
+  let summaryCount = 0
+  for (let i = 0; i < summarySettled.length; i++) {
+    const settled = summarySettled[i]
+    if (settled.status === 'fulfilled') {
+      summaryCount += settled.value
+    } else {
       // Don't let one date's failure (e.g. a Claude API hiccup) block the rest
-      console.error(`  ✗ Summary generation failed for ${date}:`, (err as Error).message)
+      console.error(`  ✗ Summary generation failed for ${datesArray[i]}:`, settled.reason)
     }
   }
 
@@ -626,73 +658,85 @@ async function generateDailySummaries(
   endDate: string,    // end of article window and storage date (inclusive)
 ): Promise<number> {
   const isWeekendRollup = startDate !== endDate
-  let summaryCount = 0
 
-  for (const category of categories) {
-    const { data: articles } = await supabase
-      .from('articles')
-      .select('title, snippet, url')
-      .eq('primary_category_id', category.id)
-      .gte('published_at', `${startDate}T00:00:00.000Z`)
-      .lte('published_at', `${endDate}T23:59:59.999Z`)
-      .order('impact_score', { ascending: false, nullsFirst: false })
-      .order('relevance_score', { ascending: false })
-      .limit(20)
+  // Each category's summary is independent — generate them concurrently
+  // instead of paying for 45s-capped Claude calls one at a time.
+  const settled = await Promise.allSettled(
+    categories.map(async (category) => {
+      const { data: articles } = await supabase
+        .from('articles')
+        .select('title, snippet, url')
+        .eq('primary_category_id', category.id)
+        .gte('published_at', `${startDate}T00:00:00.000Z`)
+        .lte('published_at', `${endDate}T23:59:59.999Z`)
+        .order('impact_score', { ascending: false, nullsFirst: false })
+        .order('relevance_score', { ascending: false })
+        .limit(20)
 
-    if (!articles?.length) continue
+      if (!articles?.length) return false
 
-    // Skip regeneration if the article set hasn't changed since the last
-    // summary — process-emails runs ~8x/day and would otherwise re-summarize
-    // an unchanged article list (and make an unnecessary Claude call) on
-    // every invocation. Only compare when under the query limit: once a
-    // category hits the cap, count alone can't tell us the top-20 didn't
-    // shift, so we regenerate to stay safe.
-    if (articles.length < 20) {
-      const { data: existing } = await supabase
-        .from('daily_summaries')
-        .select('article_count')
-        .eq('date', endDate)
-        .eq('category_id', category.id)
-        .maybeSingle()
-      if (existing && (existing as { article_count: number }).article_count === articles.length) {
-        continue
+      // Skip regeneration if the article set hasn't changed since the last
+      // summary — process-emails runs ~8x/day and would otherwise re-summarize
+      // an unchanged article list (and make an unnecessary Claude call) on
+      // every invocation. Only compare when under the query limit: once a
+      // category hits the cap, count alone can't tell us the top-20 didn't
+      // shift, so we regenerate to stay safe.
+      if (articles.length < 20) {
+        const { data: existing } = await supabase
+          .from('daily_summaries')
+          .select('article_count')
+          .eq('date', endDate)
+          .eq('category_id', category.id)
+          .maybeSingle()
+        if (existing && (existing as { article_count: number }).article_count === articles.length) {
+          return false
+        }
       }
-    }
 
-    const bulletList = articles
-      .map((a, i) => `${i + 1}. ${a.title}${a.snippet ? ': ' + a.snippet : ''}`)
-      .join('\n')
+      const bulletList = articles
+        .map((a, i) => `${i + 1}. ${a.title}${a.snippet ? ': ' + a.snippet : ''}`)
+        .join('\n')
 
-    const summaryText = await generateCategorySummary(
-      anthropicKey,
-      category.name,
-      bulletList,
-      articles.length,
-      isWeekendRollup,
-    )
-
-    // Upsert under endDate so the summary appears on the correct day.
-    const { error } = await supabase
-      .from('daily_summaries')
-      .upsert(
-        {
-          date:          endDate,
-          category_id:   category.id,
-          summary:       summaryText,
-          article_count: articles.length,
-          generated_at:  new Date().toISOString(),
-        },
-        { onConflict: 'date,category_id' },
+      const summaryText = await generateCategorySummary(
+        anthropicKey,
+        category.name,
+        bulletList,
+        articles.length,
+        isWeekendRollup,
       )
 
-    if (error) {
-      console.error(`  ✗ Failed to save summary for ${category.name}: ${error.message}`)
-    } else {
-      summaryCount++
+      // Upsert under endDate so the summary appears on the correct day.
+      const { error } = await supabase
+        .from('daily_summaries')
+        .upsert(
+          {
+            date:          endDate,
+            category_id:   category.id,
+            summary:       summaryText,
+            article_count: articles.length,
+            generated_at:  new Date().toISOString(),
+          },
+          { onConflict: 'date,category_id' },
+        )
+
+      if (error) {
+        console.error(`  ✗ Failed to save summary for ${category.name}: ${error.message}`)
+        return false
+      }
       console.log(`  ✓ Summary [${startDate}→${endDate}] ${category.name}: ${articles.length} articles`)
+      return true
+    }),
+  )
+
+  let summaryCount = 0
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i]
+    if (s.status === 'fulfilled') {
+      if (s.value) summaryCount++
+    } else {
+      console.error(`  ✗ Summary generation failed for ${categories[i].name}: ${s.reason}`)
     }
   }
-
   return summaryCount
 }
 
