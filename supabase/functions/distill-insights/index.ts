@@ -187,7 +187,10 @@ async function runDaily(
           .map((a) => ({ insight_id: (inserted as { id: string }).id, article_id: a.id, relation: 'supporting' }))
 
         if (sourceRows.length) {
-          await supabase.from('insight_sources').insert(sourceRows)
+          const { error: sourcesError } = await supabase.from('insight_sources').insert(sourceRows)
+          if (sourcesError) {
+            console.error(`  ✗ Failed to insert insight_sources for insight ${(inserted as { id: string }).id} (${domain}):`, sourcesError.message)
+          }
         }
         created++
       }
@@ -260,7 +263,32 @@ No markdown, no explanation — raw JSON only.`
   try {
     const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
     const parsed = JSON.parse(cleaned)
-    return Array.isArray(parsed) ? parsed : []
+    const rawCandidates: unknown[] = Array.isArray(parsed) ? parsed : []
+
+    let dropped = 0
+    const validated: CandidateInsight[] = []
+    for (const c of rawCandidates.slice(0, 3)) {
+      const item = c as Partial<CandidateInsight> | null | undefined
+      const text = item?.text
+      const confidence = item?.confidence
+
+      if (typeof text !== 'string' || !text.trim() || typeof confidence !== 'number' || !Number.isFinite(confidence)) {
+        dropped++
+        continue
+      }
+
+      validated.push({
+        text,
+        confidence: Math.min(Math.max(confidence, 0), 1),
+        source_indices: Array.isArray(item?.source_indices) ? item.source_indices : [],
+      })
+    }
+
+    if (dropped > 0) {
+      console.error(`Dropped ${dropped} candidate insight(s) with invalid shape from Claude response`)
+    }
+
+    return validated
   } catch {
     console.error('Failed to parse Claude extraction JSON:', rawText.slice(0, 300))
     return []
