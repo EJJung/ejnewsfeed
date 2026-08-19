@@ -343,7 +343,7 @@ async function runWeekly(
       const existing = (existingRows || []) as InsightRow[]
 
       const decision = await classifyCandidates(anthropicKey, categoryName, candidates, existing)
-      const counts = await applyWeeklyDecision(supabase, decision, todayISO)
+      const counts = await applyWeeklyDecision(supabase, decision, todayISO, existing)
       console.log(`  ✓ ${domain}: promoted=${counts.promoted} merged=${counts.merged} contested=${counts.contested} rejected=${counts.rejected}`)
       return { domain, ...counts }
     }),
@@ -448,8 +448,11 @@ async function applyWeeklyDecision(
   supabase: ReturnType<typeof createClient>,
   decision: WeeklyDecision,
   todayISO: string,
+  existing: InsightRow[],
 ): Promise<{ promoted: number; merged: number; contested: number; rejected: number }> {
   let promoted = 0, merged = 0, contested = 0, rejected = 0
+  const existingIds = new Set(existing.map((e) => e.id))
+  const invalidTargetRejects: string[] = []
 
   if (decision.promote.length) {
     const { error } = await supabase.from('insights').update({ status: 'active', updated_at: new Date().toISOString() }).in('id', decision.promote)
@@ -457,6 +460,12 @@ async function applyWeeklyDecision(
   }
 
   for (const { candidate_id, into_insight_id } of decision.merge) {
+    if (!existingIds.has(into_insight_id)) {
+      console.error(`  ✗ merge: candidate ${candidate_id} references invalid/hallucinated into_insight_id ${into_insight_id} (not among existing insights shown to Claude); rejecting candidate instead`)
+      invalidTargetRejects.push(candidate_id)
+      continue
+    }
+
     const { data: sources } = await supabase.from('insight_sources').select('article_id, relation').eq('insight_id', candidate_id)
     for (const src of (sources || []) as { article_id: string; relation: string }[]) {
       await supabase.from('insight_sources').upsert(
@@ -464,12 +473,23 @@ async function applyWeeklyDecision(
         { onConflict: 'insight_id,article_id' },
       )
     }
-    await supabase.from('insights').update({ status: 'superseded', superseded_by: into_insight_id, updated_at: new Date().toISOString() }).eq('id', candidate_id)
-    await supabase.from('insights').update({ last_confirmed_at: todayISO, updated_at: new Date().toISOString() }).eq('id', into_insight_id)
+    const { error: candidateError } = await supabase.from('insights').update({ status: 'superseded', superseded_by: into_insight_id, updated_at: new Date().toISOString() }).eq('id', candidate_id)
+    const { error: targetError } = await supabase.from('insights').update({ last_confirmed_at: todayISO, updated_at: new Date().toISOString() }).eq('id', into_insight_id)
+
+    if (candidateError || targetError) {
+      console.error(`  ✗ merge: update failed for candidate ${candidate_id} -> into ${into_insight_id}:`, candidateError?.message, targetError?.message)
+      continue
+    }
     merged++
   }
 
   for (const { candidate_id, conflicts_with_insight_id } of decision.contest) {
+    if (!existingIds.has(conflicts_with_insight_id)) {
+      console.error(`  ✗ contest: candidate ${candidate_id} references invalid/hallucinated conflicts_with_insight_id ${conflicts_with_insight_id} (not among existing insights shown to Claude); rejecting candidate instead`)
+      invalidTargetRejects.push(candidate_id)
+      continue
+    }
+
     const { data: sources } = await supabase.from('insight_sources').select('article_id').eq('insight_id', candidate_id)
     for (const src of (sources || []) as { article_id: string }[]) {
       await supabase.from('insight_sources').upsert(
@@ -477,14 +497,20 @@ async function applyWeeklyDecision(
         { onConflict: 'insight_id,article_id' },
       )
     }
-    await supabase.from('insights').update({ status: 'contested', updated_at: new Date().toISOString() }).eq('id', conflicts_with_insight_id)
-    await supabase.from('insights').update({ status: 'superseded', superseded_by: conflicts_with_insight_id, updated_at: new Date().toISOString() }).eq('id', candidate_id)
+    const { error: targetError } = await supabase.from('insights').update({ status: 'contested', updated_at: new Date().toISOString() }).eq('id', conflicts_with_insight_id)
+    const { error: candidateError } = await supabase.from('insights').update({ status: 'superseded', superseded_by: conflicts_with_insight_id, updated_at: new Date().toISOString() }).eq('id', candidate_id)
+
+    if (targetError || candidateError) {
+      console.error(`  ✗ contest: update failed for candidate ${candidate_id} vs ${conflicts_with_insight_id}:`, targetError?.message, candidateError?.message)
+      continue
+    }
     contested++
   }
 
-  if (decision.reject.length) {
-    const { error } = await supabase.from('insights').update({ status: 'rejected', updated_at: new Date().toISOString() }).in('id', decision.reject)
-    if (!error) rejected = decision.reject.length
+  const rejectIds = [...decision.reject, ...invalidTargetRejects]
+  if (rejectIds.length) {
+    const { error } = await supabase.from('insights').update({ status: 'rejected', updated_at: new Date().toISOString() }).in('id', rejectIds)
+    if (!error) rejected = decision.reject.length + invalidTargetRejects.length
   }
 
   return { promoted, merged, contested, rejected }
