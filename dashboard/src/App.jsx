@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar.jsx'
 import ScanView from './components/ScanView.jsx'
 import DiveView from './components/DiveView.jsx'
 import TrendsView from './components/TrendsView.jsx'
+import KnowledgeView from './components/KnowledgeView.jsx'
 import LoginPage from './components/LoginPage.jsx'
 import RequestAccessPage from './components/RequestAccessPage.jsx'
 import { supabase, isMockMode, signOut, checkApproval, ADMIN_EMAIL } from './lib/supabase.js'
@@ -200,6 +201,7 @@ export default function App() {
             <Route path="/category/:categoryId" element={<CategoryRoute {...scanProps} />} />
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
             <Route path="/trends" element={<TrendsView categories={categories} />} />
+            <Route path="/knowledge" element={<KnowledgeView categories={categories} />} />
             <Route path="/article/:articleId" element={<ArticleRoute savedArticles={savedArticles} onToggleSave={handleToggleSave} />} />
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />
