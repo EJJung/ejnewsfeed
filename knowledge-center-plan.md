@@ -68,29 +68,29 @@ The Aug 15 backlog fixes are committed but not deployed. Nothing new gets built 
 3. ✅ Re-copied the launchd plist and reloaded — audits now fire at 11 AM, not 8:12 AM
 4. Success target was stuck=0 / pending<~30 for one full week. Declared done early after finding and fixing the actual remaining defect: `process-emails` did Claude extraction and summary generation sequentially per email/category, so runs regularly exceeded the 5-minute EdgeRuntime ceiling and got killed by the stale-run watchdog (~half of all invocations). Parallelized extraction, article saves, and summary generation (`Promise.allSettled`), which cut run time from 2–5+ min to ~50s, and raised the per-run batch cap 4→8. Commit `6d49537`, deployed and verified live (backlog 33→23 pending in one afternoon, 0 stuck). Ongoing health should still be watched via the daily audits, but the root cause is fixed and the pipeline no longer needs babysitting to proceed to Phase 1.
 
-### Phase 1 — Knowledge layer + multi-source ingestion (~2–3 weeks)
+### Phase 1 — Knowledge layer + multi-source ingestion (~2–3 weeks) — 1b/1c/1d ✅ COMPLETE, 1a IN PROGRESS (2026-08-19)
 
-**1a. Generalize ingestion.** Extend `articles` (or introduce a `content_items` view of it) with `content_type` ('newsletter', 'web_article', 'youtube', 'podcast'), `transcript`, `duration_seconds`, `media_url`. Add three adapters, each normalizing into the same shape the existing Claude extraction step already consumes:
+**1a. Generalize ingestion.** Extend `articles` (or introduce a `content_items` view of it) with `content_type` ('newsletter', 'web_article', 'youtube', 'podcast'), `transcript`, `duration_seconds`, `media_url`. Add adapters, each normalizing into the same shape the existing Claude extraction step already consumes:
 
-- **RSS/web articles** — feed list in `sources`, fetched on schedule
-- **YouTube** — channel/playlist subscriptions; transcripts via captions API (fall back to Whisper on audio when captions are missing)
-- **Podcasts** — RSS subscriptions; audio → Whisper transcription (transcribe on save/flag rather than every episode, to control cost)
+- ~~**RSS/web articles**~~ — dropped from scope; EJ has no RSS feeds to ingest.
+- ✅ **YouTube** — 8 subscribed channels (Lenny's Podcast, Dwarkesh Patel, Matt Wolfe, Riley Brown, Matt Pocock, Two Minute Papers, Hamel Husain, AI Engineer; Lex Fridman excluded as off-domain). New parallel lane (`raw_videos` buffer, mirrors `raw_emails`) rather than widening the newsletter lane — `fetch-emails`/`process-emails` untouched. Pipeline: `fetch-videos` (poll via free channel RSS + YouTube Data API overflow backfill → enrich/duration-gate via Data API before spending any transcript credit → transcribe via Supadata) → `process-videos` (Claude categorization/summarization → `articles` row, `content_type='youtube'`, `impact_score` = source-tier-only). Scheduled via `pg_cron` every 4h, staggered 15min per stage. Design spec: `docs/superpowers/specs/2026-08-19-youtube-ingestion-design.md`; plan: `docs/superpowers/plans/2026-08-19-youtube-ingestion.md`. Live-verified against production: 120 videos polled, 62 duration-gated as eligible, 32+ transcribed, 16+ real `articles` rows created; dashboard shows a thumbnail + duration badge on video cards. Two real bugs found and fixed during live testing: a Supadata rate-limit (switched from concurrent to ~1 req/sec-paced requests) and a silent whole-channel-outage alerting gap. **Remaining manual step:** `supabase/pg_cron_youtube.sql` still needs to be applied in the SQL Editor to turn on the automatic schedule (currently only runs on manual invocation). Source tiers left at default (all 8 channels tier C / 0.3 impact_score) — revisit later if warranted.
+- ⏸️ **Podcasts** — deferred. Transcription requires Whisper, which conflicts with this doc's "AI stack decision" (OpenAI limited to TTS + Realtime API) — needs that question resolved before scoping.
 
-**1b. Knowledge layer schema.** New tables, all domain-tagged and source-linked:
+**1b. Knowledge layer schema.** ✅ Complete. New tables, all domain-tagged and source-linked:
 
-- `insights` — a claim or finding: text, domain(s), stance/confidence, status (active / superseded / contested), links to supporting and contradicting content items
-- `decisions` — decision text, context, date, the meeting or moment it came from, status (standing / revisited / reversed)
-- `hypotheses` — statement, current evidence for/against (links to insights), status (open / supported / refuted)
-- `open_questions` — question, why it matters, status (open / answered → link to resolving insight)
+- `insights` — a claim or finding: text, domain(s), stance/confidence, status (candidate / active / superseded / contested / rejected), links to supporting and contradicting content items via `insight_sources`
+- `decisions`, `hypotheses`, `open_questions` — schema created (matching the shape below), left empty until Phase 3's write-back loop populates them
 
 Design rule for the professional-reasoning system: no ejnewsfeed-specific assumptions in these tables — generic domain taxonomy, generic source references — so skills can query them directly later.
 
-**1c. Distillation jobs.**
+**1c. Distillation jobs.** ✅ Complete.
 
-- Daily: after summaries, Claude extracts candidate insights from the day's items (cheap, incremental)
-- Weekly per domain: Claude deep-research synthesis — merges candidate insights, detects contradictions with existing insights, updates statuses, produces a weekly trend report (stored; becomes podcast + Meeting Pack input)
+- Daily: `distill-insights` extracts 0–3 candidate insights per domain from the day's top-impact articles (cheap, incremental)
+- Weekly per domain: merges candidate insights against existing active insights, detects contradictions, promotes/merges/contests/rejects — live-tested against real data including the first-ever exercise of the promote and contest branches
 
-**1d. Dashboard: Knowledge view.** Browse insights by domain; filters for contested items and open questions; each insight expands to its sources. (This replaces "scroll the feed" as the primary way EJ engages.)
+Design spec: `docs/superpowers/specs/2026-08-18-knowledge-layer-schema-distillation-design.md`; plan: `docs/superpowers/plans/2026-08-18-knowledge-layer-distillation.md`.
+
+**1d. Dashboard: Knowledge view.** ✅ Complete. Browse insights by domain; status filter (active/contested by default, toggle for candidate/superseded/rejected); each insight expands inline to its sources, with a supporting/contradicting split for contested insights. Design spec: `docs/superpowers/specs/2026-08-19-knowledge-view-design.md`; plan: `docs/superpowers/plans/2026-08-19-knowledge-view.md`. A pre-existing RLS bug (knowledge-layer tables granted `anon` instead of `authenticated` read access — this dashboard requires sign-in, so the tables were silently returning empty results for real users) was found and fixed live during this work, and a second instance of the same bug class was found and fixed on `pipeline_runs`/`AdminView`.
 
 ### Phase 2 — Podcast (~1–2 weeks)
 
