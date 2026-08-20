@@ -17,6 +17,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { XMLParser } from 'https://esm.sh/fast-xml-parser@4'
 import { sendAlert } from '../_shared/alert.ts'
+import { getTranscript, NoCaptionsError } from '../_shared/transcript.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -354,8 +355,52 @@ async function runEnrich(supabase: ReturnType<typeof createClient>): Promise<{ e
   return { enriched, too_short: tooShort, errored }
 }
 
-// ── Transcribe mode (Task 5) ─────────────────────────────────────────────
+// ── Transcribe mode ──────────────────────────────────────────────────────
 
-async function runTranscribe(_supabase: ReturnType<typeof createClient>): Promise<Record<string, unknown>> {
-  throw new Error('transcribe mode not implemented yet')
+const MAX_ATTEMPTS = 4
+
+async function runTranscribe(supabase: ReturnType<typeof createClient>): Promise<{ transcribed: number; no_captions: number; retried: number; errored: number }> {
+  const { data: rows, error } = await supabase
+    .from('raw_videos')
+    .select('id, youtube_video_id, attempts')
+    .eq('status', 'enriched')
+    .lt('attempts', MAX_ATTEMPTS)
+    .order('published_at', { ascending: true })
+    .limit(15)
+
+  if (error) throw new Error(`Failed to load enriched videos: ${error.message}`)
+  const videos = (rows || []) as Array<{ id: string; youtube_video_id: string; attempts: number }>
+
+  const settled = await Promise.allSettled(
+    videos.map(async (video) => {
+      try {
+        const { text, lang } = await getTranscript(video.youtube_video_id)
+        await supabase.from('raw_videos').update({
+          transcript: text, transcript_lang: lang, status: 'transcribed',
+        }).eq('id', video.id)
+        return 'transcribed' as const
+      } catch (err) {
+        if (err instanceof NoCaptionsError) {
+          await supabase.from('raw_videos').update({ status: 'no_captions' }).eq('id', video.id)
+          return 'no_captions' as const
+        }
+        const nextAttempts = video.attempts + 1
+        const msg = err instanceof Error ? err.message : String(err)
+        if (nextAttempts >= MAX_ATTEMPTS) {
+          await supabase.from('raw_videos').update({ status: 'error', attempts: nextAttempts, error_message: msg }).eq('id', video.id)
+          await sendAlert(supabase, 'fetch-videos', `Video ${video.youtube_video_id} failed transcription after ${MAX_ATTEMPTS} attempts: ${msg}`)
+          return 'errored' as const
+        }
+        await supabase.from('raw_videos').update({ attempts: nextAttempts }).eq('id', video.id)
+        return 'retried' as const
+      }
+    }),
+  )
+
+  const counts = { transcribed: 0, no_captions: 0, retried: 0, errored: 0 }
+  for (const s of settled) {
+    if (s.status === 'fulfilled') counts[s.value]++
+    else console.error(`  ✗ Unexpected transcribe error: ${s.reason}`)
+  }
+  return counts
 }
