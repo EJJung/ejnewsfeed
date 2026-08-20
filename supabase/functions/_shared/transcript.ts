@@ -30,9 +30,17 @@ async function getSupadataTranscript(videoId: string): Promise<TranscriptResult>
   const apiKey = Deno.env.get('SUPADATA_API_KEY')
   if (!apiKey) throw new Error('SUPADATA_API_KEY is not set')
 
+  // Timeout bounds the sequential transcribe loop's worst case. The design
+  // spec describes Supadata calls as "fast HTTP calls (~50-500ms)" in the
+  // common case, so 10s is still 20-200x headroom over typical latency —
+  // plenty of margin for real transient slowness — while keeping a
+  // fully-degraded batch (every call timing out) at roughly
+  // 15 * (10s + 1.1s pacing) ~= 166s (~2.8 min), safely under the 5-minute
+  // EdgeRuntime background-execution ceiling. At 30s this same worst case
+  // would run ~465s (~7.8 min), blowing past that ceiling.
   const res = await fetch(
     `https://api.supadata.ai/v1/youtube/transcript?videoId=${encodeURIComponent(videoId)}&text=true`,
-    { headers: { 'x-api-key': apiKey }, signal: AbortSignal.timeout(30_000) },
+    { headers: { 'x-api-key': apiKey }, signal: AbortSignal.timeout(10_000) },
   )
 
   if (res.status === 404) {
