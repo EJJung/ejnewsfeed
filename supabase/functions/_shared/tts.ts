@@ -78,6 +78,35 @@ export async function synthesizeSpeech(
   return concatenateBuffers(buffers)
 }
 
+export interface QuotaCheck {
+  sufficient: boolean
+  remaining: number | null
+  required: number
+}
+
+/**
+ * Best-effort pre-flight check against ElevenLabs' remaining character
+ * quota before spending any credits on synthesis. If the account/key can't
+ * report quota (e.g. an API key scoped without the `user_read` permission
+ * needed for GET /v1/user/subscription), remaining comes back null and the
+ * check reports sufficient — we can't verify, so we don't block a run on it.
+ */
+export async function checkQuota(apiKey: string, requiredChars: number): Promise<QuotaCheck> {
+  try {
+    const res = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+      headers: { 'xi-api-key': apiKey },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!res.ok) return { sufficient: true, remaining: null, required: requiredChars }
+
+    const data = await res.json()
+    const remaining = (data.character_limit ?? 0) - (data.character_count ?? 0)
+    return { sufficient: remaining >= requiredChars, remaining, required: requiredChars }
+  } catch {
+    return { sufficient: true, remaining: null, required: requiredChars }
+  }
+}
+
 export async function synthesizeDialogue(
   turns: DialogueTurn[],
   apiKey: string,

@@ -16,7 +16,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sendAlert } from '../_shared/alert.ts'
-import { synthesizeSpeech, synthesizeDialogue, type DialogueTurn } from '../_shared/tts.ts'
+import { synthesizeSpeech, synthesizeDialogue, checkQuota, type DialogueTurn } from '../_shared/tts.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -194,6 +194,16 @@ async function generateDailyEpisode(
   const script = await writeDailyScript(anthropicKey, sections)
   const wordCount = script.trim().split(/\s+/).filter(Boolean).length
   const durationSeconds = Math.round((wordCount / WORDS_PER_MINUTE) * 60)
+
+  const quota = await checkQuota(elevenLabsKey, script.length)
+  if (!quota.sufficient) {
+    await sendAlert(
+      supabase,
+      'generate-podcast',
+      `generate-podcast (daily) skipped: ElevenLabs quota too low (${quota.remaining} chars remaining, need ~${quota.required})`,
+    )
+    return { skipped: 'insufficient_elevenlabs_quota', remaining: quota.remaining, required: quota.required }
+  }
 
   const [year, month, day] = todayISO.split('-').map(Number)
   const title = `EJ Daily Brief — ${MONTHS[month - 1]} ${day}, ${year}`
@@ -391,6 +401,17 @@ async function generateWeeklyEpisode(
   const turns = await writeDialogueScript(anthropicKey, sections)
   const wordCount = turns.reduce((sum, t) => sum + t.text.trim().split(/\s+/).filter(Boolean).length, 0)
   const durationSeconds = Math.round((wordCount / WORDS_PER_MINUTE) * 60)
+
+  const totalChars = turns.reduce((sum, t) => sum + t.text.length, 0)
+  const quota = await checkQuota(elevenLabsKey, totalChars)
+  if (!quota.sufficient) {
+    await sendAlert(
+      supabase,
+      'generate-podcast',
+      `generate-podcast (weekly) skipped: ElevenLabs quota too low (${quota.remaining} chars remaining, need ~${quota.required})`,
+    )
+    return { skipped: 'insufficient_elevenlabs_quota', remaining: quota.remaining, required: quota.required }
+  }
 
   const [year, month, day] = todayISO.split('-').map(Number)
   const title = `EJ Weekly Deep Dive — ${MONTHS[month - 1]} ${day}, ${year}`
