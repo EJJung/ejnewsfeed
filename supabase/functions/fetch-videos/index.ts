@@ -371,36 +371,49 @@ async function runTranscribe(supabase: ReturnType<typeof createClient>): Promise
   if (error) throw new Error(`Failed to load enriched videos: ${error.message}`)
   const videos = (rows || []) as Array<{ id: string; youtube_video_id: string; attempts: number }>
 
-  const settled = await Promise.allSettled(
-    videos.map(async (video) => {
-      try {
-        const { text, lang } = await getTranscript(video.youtube_video_id)
-        await supabase.from('raw_videos').update({
-          transcript: text, transcript_lang: lang, status: 'transcribed',
-        }).eq('id', video.id)
-        return 'transcribed' as const
-      } catch (err) {
-        if (err instanceof NoCaptionsError) {
-          await supabase.from('raw_videos').update({ status: 'no_captions' }).eq('id', video.id)
-          return 'no_captions' as const
-        }
+  const counts = { transcribed: 0, no_captions: 0, retried: 0, errored: 0 }
+
+  // Unlike runPoll's RSS-source loop, this can't fire concurrently: Supadata
+  // rate-limits per plan tier (Free: 1 req/sec, Basic/Pro: 10 req/sec, Mega:
+  // 50 req/sec), confirmed against their pricing page. Firing all 15
+  // candidates via Promise.allSettled blows past even the Basic/Pro limit
+  // instantly and reliably produces mass 429s on the Free tier — live
+  // testing showed 14/15 failing this way on every run. The 5-minute
+  // EdgeRuntime background-execution ceiling that motivates concurrency
+  // elsewhere in this file doesn't bind here: Supadata's transcript endpoint
+  // is a fast HTTP call (tens-hundreds of ms), not the multi-second-plus
+  // call a sequential loop needs to worry about, so pacing 15 requests at
+  // ~1/sec comfortably finishes in ~15-20s, well under the ceiling.
+  for (let i = 0; i < videos.length; i++) {
+    const video = videos[i]
+    try {
+      const { text, lang } = await getTranscript(video.youtube_video_id)
+      await supabase.from('raw_videos').update({
+        transcript: text, transcript_lang: lang, status: 'transcribed',
+      }).eq('id', video.id)
+      counts.transcribed++
+    } catch (err) {
+      if (err instanceof NoCaptionsError) {
+        await supabase.from('raw_videos').update({ status: 'no_captions' }).eq('id', video.id)
+        counts.no_captions++
+      } else {
         const nextAttempts = video.attempts + 1
         const msg = err instanceof Error ? err.message : String(err)
         if (nextAttempts >= MAX_ATTEMPTS) {
           await supabase.from('raw_videos').update({ status: 'error', attempts: nextAttempts, error_message: msg }).eq('id', video.id)
           await sendAlert(supabase, 'fetch-videos', `Video ${video.youtube_video_id} failed transcription after ${MAX_ATTEMPTS} attempts: ${msg}`)
-          return 'errored' as const
+          counts.errored++
+        } else {
+          await supabase.from('raw_videos').update({ attempts: nextAttempts }).eq('id', video.id)
+          counts.retried++
         }
-        await supabase.from('raw_videos').update({ attempts: nextAttempts }).eq('id', video.id)
-        return 'retried' as const
       }
-    }),
-  )
+    }
 
-  const counts = { transcribed: 0, no_captions: 0, retried: 0, errored: 0 }
-  for (const s of settled) {
-    if (s.status === 'fulfilled') counts[s.value]++
-    else console.error(`  ✗ Unexpected transcribe error: ${s.reason}`)
+    if (i < videos.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1100))
+    }
   }
+
   return counts
 }
