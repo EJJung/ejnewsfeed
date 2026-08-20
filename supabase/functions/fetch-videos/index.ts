@@ -119,7 +119,7 @@ interface FeedEntry {
   publishedAt: string
 }
 
-async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sources_polled: number; videos_inserted: number; videos_failed: number }> {
+async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sources_polled: number; videos_inserted: number; videos_failed: number; sources_failed: number }> {
   const { data: sources, error } = await supabase
     .from('sources')
     .select('id, youtube_channel_id, min_duration_seconds, last_polled_at')
@@ -134,6 +134,7 @@ async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sou
   let videosInserted = 0
   let videosFailed = 0
   let sourcesWithFailures = 0
+  let sourcesFailed = 0
   for (let i = 0; i < settled.length; i++) {
     const s = settled[i]
     if (s.status === 'fulfilled') {
@@ -142,6 +143,7 @@ async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sou
       if (s.value.failed > 0) sourcesWithFailures++
     } else {
       console.error(`  ✗ Error polling source ${rows[i].id}: ${s.reason}`)
+      sourcesFailed++
     }
   }
 
@@ -153,7 +155,15 @@ async function runPoll(supabase: ReturnType<typeof createClient>): Promise<{ sou
     )
   }
 
-  return { sources_polled: rows.length, videos_inserted: videosInserted, videos_failed: videosFailed }
+  if (rows.length > 0 && sourcesFailed === rows.length) {
+    await sendAlert(
+      supabase,
+      'fetch-videos',
+      `fetch-videos poll: all ${rows.length} source(s) failed to poll — possible systemic RSS outage. Check Edge Function logs.`,
+    )
+  }
+
+  return { sources_polled: rows.length, videos_inserted: videosInserted, videos_failed: videosFailed, sources_failed: sourcesFailed }
 }
 
 async function pollOneChannel(supabase: ReturnType<typeof createClient>, source: SourceRow): Promise<{ inserted: number; failed: number }> {
