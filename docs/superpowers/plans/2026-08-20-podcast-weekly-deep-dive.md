@@ -40,7 +40,7 @@
 - Consumes: `sendAlert(supabase, jobName, message)` from `_shared/alert.ts` (existing, unchanged); `episodes`, `insights`, `insight_sources`, `open_questions`, `articles`, `pipeline_runs` tables (existing schema, unchanged).
 - Produces: `synthesizeDialogue(turns: DialogueTurn[], apiKey: string, voiceIds: {A: string, B: string}): Promise<Uint8Array>` exported from `_shared/tts.ts`, where `DialogueTurn = {speaker: 'A'|'B', text: string}` (also exported from `_shared/tts.ts`). `generate-podcast`'s `Deno.serve` handler now branches on `mode` read from the request body.
 
-- [ ] **Step 1: Rewrite `_shared/tts.ts`**
+- [x] **Step 1: Rewrite `_shared/tts.ts`**
 
 ```typescript
 /**
@@ -144,7 +144,9 @@ export async function synthesizeDialogue(
 
 This is a refactor of the existing daily-brief file: `chunkScript` and `synthesizeSpeech` keep their exact prior signatures and behavior (the per-request fetch logic is extracted into the new internal `synthesizeChunk` helper, reused by both `synthesizeSpeech` and the new `synthesizeDialogue`). The daily brief's call site in `generate-podcast` needs no changes for this file.
 
-- [ ] **Step 2: Rewrite `generate-podcast/index.ts`**
+**Post-merge addition (2026-08-20, outside this plan's original scope):** `_shared/tts.ts` also gained an exported `checkQuota(apiKey, requiredChars)` — a best-effort pre-flight check against ElevenLabs' remaining character quota (`GET /v1/user/subscription`) called by both modes in `generate-podcast/index.ts` right after script/dialogue generation and before any TTS spend. If quota is insufficient it returns `{ skipped: 'insufficient_elevenlabs_quota', remaining, required }` and alerts via `sendAlert`, instead of burning partial credits into a broken/truncated episode. It fails open (`sufficient: true, remaining: null`) if the key can't read subscription data (e.g. missing `user_read` permission) or the call errors, so it never blocks a legitimate run on an unverifiable check. This was added in response to the account's TTS quota being exhausted (195/10,000 chars) at the time this plan's Step 5 first ran; not part of the original design spec, but a direct consequence of the risk it flagged in §8.
+
+- [x] **Step 2: Rewrite `generate-podcast/index.ts`**
 
 ```typescript
 /**
@@ -698,7 +700,7 @@ async function uploadEpisodeAudio(
 
 Note: the daily path's Storage-upload block is now factored into the shared `uploadEpisodeAudio` helper (used by both `generateDailyEpisode` and `generateWeeklyEpisode`) instead of being duplicated — this is a same-file refactor of code this task is already fully rewriting, not a separate cross-file change.
 
-- [ ] **Step 3: Deploy**
+- [x] **Step 3: Deploy**
 
 ```bash
 cd /Users/ejjung/Dev/ejnewsfeed && supabase functions deploy generate-podcast
@@ -706,7 +708,7 @@ cd /Users/ejjung/Dev/ejnewsfeed && supabase functions deploy generate-podcast
 
 Expected: `Deployed Functions on project oqxxmdyyfjgigfjtposv: generate-podcast`.
 
-- [ ] **Step 4: Set voice secrets (optional — see Global Constraints)**
+- [x] **Step 4: Set voice secrets (optional — see Global Constraints)**
 
 ```bash
 cd /Users/ejjung/Dev/ejnewsfeed && supabase secrets set ELEVENLABS_VOICE_ID_A=<voice id> ELEVENLABS_VOICE_ID_B=<voice id>
@@ -714,7 +716,7 @@ cd /Users/ejjung/Dev/ejnewsfeed && supabase secrets set ELEVENLABS_VOICE_ID_A=<v
 
 Skip this step if using the code defaults (`ErXwobaYiN019PkySvjV` / `21m00Tcm4TlvDq8ikWAM`) — that's expected and fine for first verification.
 
-- [ ] **Step 5: Invoke weekly mode and verify**
+- [~] **Step 5: Invoke weekly mode and verify** — partially complete as of 2026-08-20; see note below
 
 ```bash
 cd pipeline && python3 -c "
@@ -766,7 +768,9 @@ Expected: run `status: success`; latest weekly episode `status: 'ready'` with a 
 
 Once a `'ready'` weekly episode exists, open its `audio_url` in a browser and listen to at least the first two minutes — confirm two distinct voices alternate (not one voice reading both parts), the pacing sounds like dialogue rather than monologue, and ElevenLabs didn't 429 mid-synthesis (if it did, see Global Constraints' note on turn-count/rate limits).
 
-- [ ] **Step 6: Commit**
+**Status as of 2026-08-20:** invoked live against production twice (once at merge time, once again today). Both times correctly hit `skipped: 'no_content'` — the knowledge layer had zero `active`/`contested` insights and zero `open_questions` (only 15 `candidate` insights from 2026-08-19, awaiting the *weekly* per-domain promotion run, which hasn't fired yet since). This is the documented correct behavior for that state, not a bug, but it means the TTS/audio path (voice pairing, turn pacing, rate limits) is still **unverified by ear**. The ElevenLabs quota blocker that was also present at merge time (195/10,000 chars) has since cleared — the billing period reset today, 120,954 chars now available. A scheduled cloud check-in (routine `trig_012VbUyofuAui5SxsxDe4pxu`, fires 2026-08-24T14:00Z, 45 min after the first real Monday `podcast-weekly-deep-dive` cron run) will query `pipeline_runs`/`episodes`/`insights` and report PASS/PARTIAL/FAIL — that run is what will actually close out this step's listening check.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add supabase/functions/_shared/tts.ts supabase/functions/generate-podcast/index.ts
@@ -783,7 +787,7 @@ git commit -m "feat: add weekly deep dive mode to generate-podcast, two-voice TT
 **Interfaces:**
 - Consumes: `generate-podcast` function with `mode='weekly'` support (Task 1), `_pipeline_config` table (existing, keys `supabase_url`/`supabase_anon_key`).
 
-- [ ] **Step 1: Rewrite the cron SQL file**
+- [x] **Step 1: Rewrite the cron SQL file**
 
 ```sql
 -- ============================================================
@@ -840,11 +844,11 @@ ORDER BY jobname;
 
 `cron.schedule()` upserts by job name, so re-running the existing `podcast-daily-brief` block is a safe no-op re-application, not a duplicate.
 
-- [ ] **Step 2: Apply manually**
+- [x] **Step 2: Apply manually**
 
 Open the Supabase SQL Editor and run the contents of `supabase/pg_cron_podcast.sql`. Confirm the final `SELECT` shows two rows: `podcast-daily-brief` (`35 22 * * *`, `active = true`) and `podcast-weekly-deep-dive` (`15 13 * * 1`, `active = true`).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add supabase/pg_cron_podcast.sql
@@ -856,3 +860,5 @@ git commit -m "feat: schedule generate-podcast weekly deep dive via pg_cron"
 ## After this plan lands
 
 Update `knowledge-center-plan.md`'s Phase 2 entry (weekly deep dive line, currently `⏸️ not started`) once this ships and has run for at least one real Monday — matching how the daily brief's and Phase 1a's entries were updated in-place after those shipped. Not a task here since it's documentation bookkeeping on a different file, not part of this feature's own deliverable.
+
+**Status (2026-08-20):** code shipped and deployed (Tasks 1–2 complete, commits `35449ae`/`a5083f0`), `knowledge-center-plan.md`'s Phase 2 entry already updated in-place to `🔧 IMPLEMENTED, LIVE VERIFICATION PENDING`. Still waiting on the first real Monday run to confirm end-to-end (see Task 1 Step 5's status note above) — tracked by the scheduled check-in routine, not yet done.
