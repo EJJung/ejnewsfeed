@@ -22,7 +22,7 @@ This knowledge center also serves as the knowledge substrate for EJ's profession
 
 ### AI stack decision
 
-Claude remains the core intelligence for extraction, categorization, synthesis, research, Meeting Pack assembly, and post-meeting write-back (the existing pipeline already runs on it). OpenAI is used only where it is uniquely strong: **TTS** for podcast audio and the **Realtime API** for live voice discussion sessions. This keeps the system to two AI vendors with clear responsibilities.
+Claude remains the core intelligence for extraction, categorization, synthesis, research, Meeting Pack assembly, and post-meeting write-back (the existing pipeline already runs on it). **Revised 2026-08-20:** TTS is **ElevenLabs**, not OpenAI — EJ's call during Phase 2 implementation, prioritizing voice realism (existing ElevenLabs account) over vendor-count minimalism. OpenAI is now reserved solely for the **Realtime API** in Phase 3's live voice discussion sessions. The system runs on three AI vendors: Claude (reasoning), ElevenLabs (TTS), OpenAI (Realtime API only).
 
 ---
 
@@ -92,12 +92,12 @@ Design spec: `docs/superpowers/specs/2026-08-18-knowledge-layer-schema-distillat
 
 **1d. Dashboard: Knowledge view.** ✅ Complete. Browse insights by domain; status filter (active/contested by default, toggle for candidate/superseded/rejected); each insight expands inline to its sources, with a supporting/contradicting split for contested insights. Design spec: `docs/superpowers/specs/2026-08-19-knowledge-view-design.md`; plan: `docs/superpowers/plans/2026-08-19-knowledge-view.md`. A pre-existing RLS bug (knowledge-layer tables granted `anon` instead of `authenticated` read access — this dashboard requires sign-in, so the tables were silently returning empty results for real users) was found and fixed live during this work, and a second instance of the same bug class was found and fixed on `pipeline_runs`/`AdminView`.
 
-### Phase 2 — Podcast (~1–2 weeks)
+### Phase 2 — Podcast — daily brief ✅ COMPLETE (2026-08-20), weekly deep dive NOT STARTED
 
-- **Daily brief (~5 min, single voice):** Claude turns daily summaries into a spoken-word script (not read-aloud prose — written for the ear) → OpenAI TTS → mp3 in Supabase Storage
-- **Weekly deep dive (~15–20 min, two hosts):** Claude writes a dialogue from the weekly synthesis — trends, contradictions, "what changed this week," open questions worth EJ's attention → two-voice TTS, stitched
-- **Delivery:** `episodes` table + an Edge Function serving a private RSS feed URL, so episodes appear in any podcast app automatically
-- pg_cron triggers both after their source summaries complete
+- ✅ **Daily brief (content-driven length, typically 5–20 min, single voice):** Claude turns the day's `daily_summaries` + top articles into one continuous spoken-word script (not read-aloud prose — written for the ear, ordered by impact across all categories) → **ElevenLabs TTS** (chunked ≤4500 chars on paragraph boundaries, synthesized sequentially, concatenated) → mp3 in Supabase Storage (`podcast-episodes` bucket). Scheduled via `pg_cron` at 22:35 UTC, 5 min after the evening `distill-insights` run. Live-verified against production: first real episode generated end-to-end (1,682 words, ~11 min, `status='ready'`, served correctly through the RSS feed) in ~70s. Design spec: `docs/superpowers/specs/2026-08-20-podcast-daily-brief-design.md`; plan: `docs/superpowers/plans/2026-08-20-podcast-daily-brief.md`. Scope was deliberately split from the original combined Phase 2 write-up above — daily brief first, to ship value sooner and build the shared delivery infra; weekly deep dive is its own follow-on spec.
+- ⏸️ **Weekly deep dive (~15–20 min, two hosts):** not started. Claude writes a dialogue from the weekly synthesis — trends, contradictions, "what changed this week," open questions worth EJ's attention → two-voice TTS (ElevenLabs, matching the daily brief's vendor choice), stitched. Needs its own design pass — the `episodes` table already has a `kind` column (`'daily'`/`'weekly'`) so this slots in without a schema change, and `_shared/tts.ts`'s `synthesizeSpeech` helper is already vendor-agnostic enough to reuse.
+- ✅ **Delivery:** `episodes` table + `podcast-feed` Edge Function serving a token-gated private RSS feed URL (deployed with `--no-verify-jwt` since real podcast apps can't send a Supabase auth header), so episodes appear in any podcast app automatically. Currently serves daily-brief episodes only; weekly episodes will appear in the same feed once built.
+- ✅ `pg_cron` triggers the daily brief after its source summaries complete; a companion watchdog exemption (`pg_cron_watchdog_exclude_podcast.sql`) keeps the pipeline's existing global 5-minute stale-run alert from false-positiving on this job's longer TTS-synthesis runtime.
 
 ### Phase 3 — Discussion sessions (~3–4 weeks)
 
