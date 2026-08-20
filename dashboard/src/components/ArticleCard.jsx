@@ -4,10 +4,22 @@ export default function ArticleCard({ article, category, isSaved, onArticleClick
   const timeAgo = article.published_at
     ? formatDistanceToNow(new Date(article.published_at), { addSuffix: true })
     : null
+  const isVideo = article.content_type === 'youtube'
+  const durationLabel = article.duration_seconds
+    ? `${Math.floor(article.duration_seconds / 60)}m`
+    : null
 
   return (
     <div className="group bg-white border border-gray-100 rounded-xl px-4 py-3.5 hover:border-gray-200 hover:shadow-sm transition-all cursor-pointer">
       <div className="flex items-start gap-3">
+        {isVideo && article.thumbnail_url && (
+          <img
+            src={article.thumbnail_url}
+            alt=""
+            className="w-16 h-16 rounded-lg object-cover shrink-0"
+            onClick={() => onArticleClick(article)}
+          />
+        )}
         <div className="flex-1 min-w-0" onClick={() => onArticleClick(article)}>
           <h3 className="text-sm font-medium text-gray-900 leading-snug group-hover:text-gray-700 transition-colors">
             {article.title}
@@ -18,6 +30,17 @@ export default function ArticleCard({ article, category, isSaved, onArticleClick
           <div className="flex items-center gap-2 mt-2">
             {article.source && (
               <span className="text-xs text-gray-400">{article.source}</span>
+            )}
+            {isVideo && (
+              <>
+                <span className="text-gray-300 text-xs">·</span>
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+                  </svg>
+                  {durationLabel}
+                </span>
+              </>
             )}
             {timeAgo && (
               <>
