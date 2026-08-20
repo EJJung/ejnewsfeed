@@ -225,6 +225,9 @@ Write for the ear, not the eye: short sentences, no visual references ("as shown
   if (!res.ok) throw new Error(`Claude API error ${res.status}: ${await res.text()}`)
 
   const data = await res.json()
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error('Claude response was truncated by max_tokens — script may be incomplete')
+  }
   const script = (data.content?.[0]?.text || '').trim()
   if (!script) throw new Error('Claude returned an empty script')
   return script
