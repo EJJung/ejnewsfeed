@@ -123,7 +123,16 @@ export async function assemblePack(meetingId) {
   // Optimistically flip status so the list reflects assembling immediately.
   await supabase.from('meetings').update({ status: 'assembling' }).eq('id', meetingId)
   const { error } = await supabase.functions.invoke('assemble-pack', { body: { meeting_id: meetingId } })
-  if (error) throw error
+  if (error) {
+    // Invoke never reached the function — roll the optimistic status back to a
+    // recoverable terminal state so the meeting isn't stuck at 'assembling'
+    // (where the UI disables Re-assemble and Approve).
+    await supabase
+      .from('meetings')
+      .update({ status: 'error', error_message: `Failed to start pack assembly: ${error.message}` })
+      .eq('id', meetingId)
+    throw error
+  }
 }
 
 export async function getCards(meetingId) {

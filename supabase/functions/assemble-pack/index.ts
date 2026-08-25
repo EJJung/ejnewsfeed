@@ -17,7 +17,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sendAlert } from '../_shared/alert.ts'
 import {
   parseSelection, buildCards, hydrationKey,
-  type HydratedRow, type CardInput,
+  type HydratedRow, type CardInput, type RefTable,
 } from './pack_logic.ts'
 
 const CORS = {
@@ -222,14 +222,30 @@ async function assemblePack(
   const selected = await selectRelevant(anthropicKey, m, digestParts.join('\n\n'))
   const cards = buildCards(selected, hydration)
 
-  if (cards.length) {
-    const rows = cards.map((c: CardInput) => ({ ...c, meeting_id: meetingId, included: true }))
+  // Dedup against sourced cards that survived the idempotency delete (i.e.
+  // edited cards, edited=true). Without this, re-selecting the same insight
+  // would insert a pristine twin alongside the user's edited card, and there
+  // is no delete-card UI to remove it. Manual cards have a null ref_id and
+  // are not matched here.
+  const { data: surviving } = await supabase
+    .from('context_cards')
+    .select('ref_table, ref_id')
+    .eq('meeting_id', meetingId)
+    .not('ref_id', 'is', null)
+  const survivingKeys = new Set(
+    ((surviving || []) as { ref_table: string; ref_id: string }[])
+      .map((s) => hydrationKey(s.ref_table as RefTable, s.ref_id)),
+  )
+  const freshCards = cards.filter((c) => !survivingKeys.has(hydrationKey(c.ref_table, c.ref_id)))
+
+  if (freshCards.length) {
+    const rows = freshCards.map((c: CardInput) => ({ ...c, meeting_id: meetingId, included: true }))
     const { error: insErr } = await supabase.from('context_cards').insert(rows)
     if (insErr) throw new Error(`Failed to insert context_cards: ${insErr.message}`)
   }
 
   await supabase.from('meetings').update({ status: 'pack_ready' }).eq('id', meetingId)
-  return { card_count: cards.length }
+  return { card_count: freshCards.length }
 }
 
 async function selectRelevant(apiKey: string, meeting: MeetingRow, digest: string) {
