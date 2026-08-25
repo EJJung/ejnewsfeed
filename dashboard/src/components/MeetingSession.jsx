@@ -20,6 +20,13 @@ export default function MeetingSession() {
     return mtg
   }, [id])
 
+  const doStart = useCallback(async () => {
+    setBusy(true); setError(null)
+    try { await startSession(id); await load() }
+    catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }, [id, load])
+
   useEffect(() => {
     (async () => {
       try {
@@ -27,17 +34,16 @@ export default function MeetingSession() {
         // Auto-start the session on first entry from an approved pack.
         if (mtg?.status === 'approved' && !startedRef.current) {
           startedRef.current = true
-          setBusy(true)
-          await startSession(id)
-          await load()
+          await doStart()
         }
       } catch (e) { setError(e.message) } finally { setBusy(false) }
     })()
-  }, [id, load])
+  }, [id, load, doStart])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, busy])
 
   const readOnly = meeting?.status === 'complete'
+  const needsStart = meeting?.status === 'approved' && messages.length === 0
 
   async function send() {
     const text = input.trim()
@@ -58,8 +64,12 @@ export default function MeetingSession() {
 
   async function finish() {
     if (!confirm('End this session? You can review the transcript afterward; write-back comes in the next release.')) return
-    await endSession(id)
-    navigate(`/meetings/${id}`)
+    try {
+      await endSession(id)
+      navigate(`/meetings/${id}`)
+    } catch (e) {
+      setError(e.message)
+    }
   }
 
   if (!meeting) return <div className="max-w-3xl mx-auto px-6 py-8 text-gray-500">Loading…</div>
@@ -93,6 +103,15 @@ export default function MeetingSession() {
       {readOnly ? (
         <div className="mt-2 text-sm text-gray-500 border-t border-gray-100 pt-3">
           Session complete — transcript is read-only. Write-back (turning this into decisions/hypotheses/questions) arrives in the next release.
+        </div>
+      ) : needsStart ? (
+        <div className="mt-2 border-t border-gray-100 pt-3">
+          <button onClick={doStart} disabled={busy}
+            className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 disabled:opacity-50">
+            {busy ? 'Starting…' : 'Start session'}
+          </button>
+          {busy && <div className="mt-2 text-xs text-gray-400">companion is thinking…</div>}
+          {error && <div className="mt-2 text-xs text-red-600">Couldn't start the session: {error}. Try again.</div>}
         </div>
       ) : (
         <div className="mt-2 border-t border-gray-100 pt-3">
