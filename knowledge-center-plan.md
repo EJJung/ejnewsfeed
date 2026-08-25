@@ -101,15 +101,19 @@ Design spec: `docs/superpowers/specs/2026-08-18-knowledge-layer-schema-distillat
 
 ### Phase 3 — Discussion sessions (~3–4 weeks)
 
-**3a. Meeting setup.** `meetings` table: agenda, prospective result, critical decision questions (EJ defines these), status. Simple creation form in the dashboard.
+**Prep half (3a–3c) ✅ COMPLETE (2026-08-24), backend live-verified.** Shipped as its own spec/plan (`docs/superpowers/specs/2026-08-24-meeting-pack-prep-design.md`, `docs/superpowers/plans/2026-08-24-meeting-pack-prep.md`), deliberately split from the live-session half so the approved-pack format exists before the companion is designed against it. Read-only against the knowledge layer (pack assembly only SELECTs insights/decisions/hypotheses/open_questions/articles — no code path can mutate the layer; verified in prod: knowledge-layer row counts unchanged across a real assembly). Smoke test produced a 16-card pack (insights + articles) with agenda-aware relevance rationales.
 
-**3b. Meeting Pack assembly (Claude agent — the role EJ described for Codex).** Given the agenda and questions, it pulls from the knowledge layer: relevant insights (including contradicting pairs), prior related decisions, hypotheses in play, open questions, and fresh source material. Output: a structured pack of discrete context cards.
+**3a. Meeting setup.** ✅ `meetings` table (agenda, prospective result, decision_questions[], status) + dashboard "Meetings" view with a creation form.
 
-**3c. EJ review.** Dashboard UI listing the pack's context cards with include/exclude toggles and free-text additions. Nothing enters the meeting that EJ hasn't approved — this is the human-in-the-loop control point.
+**3b. Meeting Pack assembly (Claude agent).** ✅ `assemble-pack` edge function: hands Claude a compact digest of the whole knowledge layer + recent top articles, Claude selects relevant items by id with a `why_relevant` rationale (favoring contested/contradicting pairs), hydrated into `context_cards` snapshots. Background task + `pipeline_runs` logging + `sendAlert`, same conventions as the other edge functions. Whole-layer digest works while the layer is small; a documented cap is the trigger to add retrieval later.
 
-**3d. Realtime session (the "Realtime Founder Companion").** OpenAI Realtime API over WebRTC in the dashboard. System prompt = companion persona + the approved pack. Session behaviors: work the agenda toward the prospective result, press on the critical decision questions, surface the contradictory opinions in the pack rather than agreeing by default. Session audio/transcript captured.
+**3c. EJ review.** ✅ Pack review UI: cards grouped by type with include/exclude toggles, inline edit, free-text manual additions, re-assemble (preserves manual/edited cards), and approve. Human-in-the-loop control point; terminal state `status='approved'`.
 
-**3e. Write-back (the flywheel).** After each session, Claude processes the transcript: decisions made → `decisions`; hypotheses formed/revised → `hypotheses`; new open questions → `open_questions`; meeting summary stored on the meeting record. The next pack assembly reads all of it.
+**Capture half (3d–3e) ⏸️ next spec.** Blocked on the Prep half's output (the approved pack is the companion's input contract). To be brainstormed now that a real pack format exists.
+
+**3d. Realtime session (the "Realtime Founder Companion").** OpenAI Realtime API over WebRTC in the dashboard. System prompt = companion persona + the approved pack. Session behaviors: work the agenda toward the prospective result, press on the critical decision questions, surface the contradictory opinions in the pack rather than agreeing by default. Session audio/transcript captured. *(Note: the split spec plans to validate the loop with a text chat companion first — same input contract — then swap in Realtime voice.)*
+
+**3e. Write-back (the flywheel).** After each session, Claude processes the transcript: decisions made → `decisions`; hypotheses formed/revised → `hypotheses`; new open questions → `open_questions`; meeting summary stored on the meeting record (`meetings.summary`, reserved for this). Behind a propose→approve→commit gate (EJ reviews extracted items before they enter the knowledge layer). The next pack assembly reads all of it.
 
 ### Phase 4 (later) — Compounding extras
 
