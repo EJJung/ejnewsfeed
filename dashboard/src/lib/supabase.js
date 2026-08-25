@@ -125,3 +125,39 @@ export async function assemblePack(meetingId) {
   const { error } = await supabase.functions.invoke('assemble-pack', { body: { meeting_id: meetingId } })
   if (error) throw error
 }
+
+export async function getCards(meetingId) {
+  if (isMockMode) return []
+  const { data, error } = await supabase
+    .from('context_cards').select('*').eq('meeting_id', meetingId)
+    .order('card_type').order('position')
+  if (error) throw error
+  return data
+}
+
+export async function setCardIncluded(cardId, included) {
+  if (isMockMode) return
+  const { error } = await supabase.from('context_cards').update({ included }).eq('id', cardId)
+  if (error) throw error
+}
+
+export async function editCard(cardId, { headline, body }) {
+  if (isMockMode) return
+  const { error } = await supabase
+    .from('context_cards').update({ headline, body, edited: true }).eq('id', cardId)
+  if (error) throw error
+}
+
+export async function addManualCard(meetingId, { headline, body }) {
+  if (isMockMode) return
+  const { error } = await supabase.from('context_cards').insert({
+    meeting_id: meetingId, card_type: 'manual', headline, body, included: true,
+  })
+  if (error) throw error
+}
+
+export async function approvePack(meetingId) {
+  if (isMockMode) return
+  const { error } = await supabase.from('meetings').update({ status: 'approved' }).eq('id', meetingId)
+  if (error) throw error
+}
