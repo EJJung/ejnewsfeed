@@ -638,7 +638,8 @@ card_type must match ref_table (insights→insight, decisions→decision, hypoth
 - [ ] **Step 2: Type-check the function**
 
 Run: `cd /Users/ejjung/Dev/ejnewsfeed && deno check supabase/functions/assemble-pack/index.ts`
-Expected: no errors (only the two intentional `@ts-ignore` for the `EdgeRuntime` global).
+
+Note (discovered during execution): `deno check` reports pre-existing `TS2345` `never`-type inference errors on the untyped Supabase client's `.insert()`/`.update()` calls. This is a **repo-wide, pre-existing condition** — the already-deployed `distill-insights` and `generate-podcast` functions fail `deno check` identically (unpinned `esm.sh` `@supabase/supabase-js@2` + no `Database` generic). It is inference noise, not a bug, and is NOT a valid gate for this repo's edge functions. The real validation is Step 3 (`supabase functions deploy`, which bundles/validates) + Step 4 (live invoke). Do not attempt to "fix" these by pinning versions or adding generics — that's an unrelated cross-codebase refactor the spec excludes.
 
 - [ ] **Step 3: Deploy**
 
