@@ -72,3 +72,34 @@ Deno.test('buildCards assigns positions by input order', () => {
   const cards = buildCards(selected, hydration)
   assertEquals(cards.map((c) => c.position), [0, 1])
 })
+
+Deno.test('parseSelection throws when selections is missing or not an array', () => {
+  assertThrows(() => parseSelection('{"foo":1}'))
+  assertThrows(() => parseSelection('{"selections":"not-an-array"}'))
+})
+
+Deno.test('parseSelection skips entries with non-string why_relevant', () => {
+  const raw = JSON.stringify({
+    selections: [
+      { ref_table: 'insights', ref_id: 'i1', card_type: 'insight', why_relevant: 5 },
+      { ref_table: 'insights', ref_id: 'i2', card_type: 'insight', why_relevant: 'valid' },
+    ],
+  })
+  const out = parseSelection(raw)
+  assertEquals(out.length, 1)
+  assertEquals(out[0].ref_id, 'i2')
+})
+
+Deno.test('buildCards assigns position 0 to a matched ref that follows a skipped one', () => {
+  const selected = parseSelection(JSON.stringify({
+    selections: [
+      { ref_table: 'insights', ref_id: 'missing', card_type: 'insight', why_relevant: 'r0' },
+      { ref_table: 'insights', ref_id: 'i1', card_type: 'insight', why_relevant: 'r1' },
+    ],
+  }))
+  const hydration = { [hydrationKey('insights', 'i1')]: { headline: 'H1', body: 'B1' } }
+  const cards = buildCards(selected, hydration)
+  assertEquals(cards.length, 1)
+  assertEquals(cards[0].ref_id, 'i1')
+  assertEquals(cards[0].position, 0)
+})
