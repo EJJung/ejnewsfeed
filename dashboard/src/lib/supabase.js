@@ -170,3 +170,37 @@ export async function approvePack(meetingId) {
   const { error } = await supabase.from('meetings').update({ status: 'approved' }).eq('id', meetingId)
   if (error) throw error
 }
+
+// ── Companion session helpers (Phase 3b) ──
+
+export async function getSessionMessages(meetingId) {
+  if (isMockMode) return []
+  const { data, error } = await supabase
+    .from('session_messages').select('id, role, content, seq')
+    .eq('meeting_id', meetingId).order('seq', { ascending: true })
+  if (error) throw error
+  return data
+}
+
+async function invokeSessionChat(payload) {
+  const { data, error } = await supabase.functions.invoke('session-chat', { body: payload })
+  if (error) throw error
+  if (data?.error) throw new Error(data.error)
+  return data.reply
+}
+
+export async function startSession(meetingId) {
+  if (isMockMode) throw new Error('startSession unavailable in mock mode')
+  return invokeSessionChat({ meeting_id: meetingId, start: true })
+}
+
+export async function sendSessionMessage(meetingId, text) {
+  if (isMockMode) throw new Error('sendSessionMessage unavailable in mock mode')
+  return invokeSessionChat({ meeting_id: meetingId, message: text })
+}
+
+export async function endSession(meetingId) {
+  if (isMockMode) return
+  const { error } = await supabase.from('meetings').update({ status: 'complete' }).eq('id', meetingId)
+  if (error) throw error
+}
