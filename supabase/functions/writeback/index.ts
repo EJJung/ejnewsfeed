@@ -95,14 +95,24 @@ async function runExtract(supabase: ReturnType<typeof createClient>, meetingId: 
   await supabase.from('writeback_proposals').delete()
     .eq('meeting_id', meetingId).eq('status', 'proposed').eq('edited', false)
 
-  if (inputs.length) {
-    const rows = inputs.map((p) => ({
+  // A summary is singular per meeting. If one already survives (an edited or
+  // committed summary), do NOT insert a fresh one — a duplicate would be
+  // hidden in the UI and could nondeterministically overwrite the kept
+  // summary at commit, silently discarding EJ's edit.
+  const { data: existingSummary } = await supabase.from('writeback_proposals')
+    .select('id').eq('meeting_id', meetingId).eq('kind', 'summary').limit(1)
+  const toInsert = (existingSummary && existingSummary.length > 0)
+    ? inputs.filter((p) => p.kind !== 'summary')
+    : inputs
+
+  if (toInsert.length) {
+    const rows = toInsert.map((p) => ({
       meeting_id: meetingId, kind: p.kind, text: p.text, detail: p.detail, domains: p.domains, status: 'proposed',
     }))
     const { error } = await supabase.from('writeback_proposals').insert(rows)
     if (error) throw new Error(`Failed to insert proposals: ${error.message}`)
   }
-  return { proposed: inputs.length }
+  return { proposed: toInsert.length }
 }
 
 async function extractProposals(
