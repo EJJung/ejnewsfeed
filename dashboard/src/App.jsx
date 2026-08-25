@@ -5,6 +5,8 @@ import ScanView from './components/ScanView.jsx'
 import DiveView from './components/DiveView.jsx'
 import TrendsView from './components/TrendsView.jsx'
 import KnowledgeView from './components/KnowledgeView.jsx'
+import MeetingsView from './components/MeetingsView.jsx'
+import MeetingPack from './components/MeetingPack.jsx'
 import LoginPage from './components/LoginPage.jsx'
 import RequestAccessPage from './components/RequestAccessPage.jsx'
 import { supabase, isMockMode, signOut, checkApproval, ADMIN_EMAIL } from './lib/supabase.js'
@@ -202,6 +204,8 @@ export default function App() {
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
             <Route path="/trends" element={<TrendsView categories={categories} />} />
             <Route path="/knowledge" element={<KnowledgeView categories={categories} />} />
+            <Route path="/meetings" element={<MeetingsView />} />
+            <Route path="/meetings/:id" element={<MeetingPack />} />
             <Route path="/article/:articleId" element={<ArticleRoute savedArticles={savedArticles} onToggleSave={handleToggleSave} />} />
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />
