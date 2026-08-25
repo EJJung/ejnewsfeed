@@ -28,7 +28,7 @@ This spec's terminal state is *"an approved pack exists."* It stops there on pur
         assemble-pack [Claude]
           reads compact digest of the whole knowledge layer (active/contested
             insights, standing/revisited decisions, open/supported hypotheses,
-            open questions) + recent high-impact articles for the meeting's domains
+            open questions) + recent high-impact articles (top-N across all domains)
           Claude selects relevant items BY ID + writes a why_relevant line + card_type
           hydrate selected ids from DB → INSERT context_cards (snapshots)
                     │  status='pack_ready' (or error state on failure)
@@ -96,7 +96,7 @@ Two new tables. No changes to existing tables.
 - `decisions` where `status IN ('standing','revisited')` → `{id, text, context, domains, decided_at, status}`
 - `hypotheses` where `status IN ('open','supported')` → `{id, statement, domains, status}`
 - `open_questions` where `status='open'` → `{id, question, why_it_matters, domains}`
-- recent high-impact `articles` for the meeting's domains (trailing ~14 days, top-N by impact) → `{id, title, snippet}` — the "fresh source material / color" the plan calls for
+- recent high-impact `articles` (trailing ~14 days, top-N by impact across all domains — `meetings` has no domains field; the agenda is free text, and Claude filters these to the agenda during selection) → `{id, title, snippet}` — the "fresh source material / color" the plan calls for
 
 For `contested` insights, the function also pulls their `insight_sources` supporting/contradicting article titles so Claude can present a genuine contradiction, mirroring how the weekly-podcast dialogue assembly surfaces contested pairs.
 
