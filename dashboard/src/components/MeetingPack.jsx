@@ -93,6 +93,12 @@ export default function MeetingPack() {
             View transcript
           </button>
         )}
+        {meeting.status === 'complete' && (
+          <button onClick={() => navigate(`/meetings/${id}/writeback`)}
+            className="px-4 py-1.5 rounded-lg bg-violet-600 text-white text-sm hover:bg-violet-700">
+            Write-back
+          </button>
+        )}
       </div>
 
       {!assembling && cards.length === 0 && (
