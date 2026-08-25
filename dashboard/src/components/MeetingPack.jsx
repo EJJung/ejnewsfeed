@@ -75,6 +75,24 @@ export default function MeetingPack() {
             Approve pack
           </button>
         ) : <span className="text-sm text-green-700 font-medium">✓ Approved</span>}
+        {meeting.status === 'approved' && (
+          <button onClick={() => navigate(`/meetings/${id}/session`)}
+            className="px-4 py-1.5 rounded-lg bg-violet-600 text-white text-sm hover:bg-violet-700">
+            Start session
+          </button>
+        )}
+        {meeting.status === 'in_session' && (
+          <button onClick={() => navigate(`/meetings/${id}/session`)}
+            className="px-4 py-1.5 rounded-lg bg-amber-600 text-white text-sm hover:bg-amber-700">
+            Resume session
+          </button>
+        )}
+        {meeting.status === 'complete' && (
+          <button onClick={() => navigate(`/meetings/${id}/session`)}
+            className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm hover:bg-gray-100">
+            View transcript
+          </button>
+        )}
       </div>
 
       {!assembling && cards.length === 0 && (
