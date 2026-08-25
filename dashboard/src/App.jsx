@@ -8,6 +8,7 @@ import KnowledgeView from './components/KnowledgeView.jsx'
 import MeetingsView from './components/MeetingsView.jsx'
 import MeetingPack from './components/MeetingPack.jsx'
 import MeetingSession from './components/MeetingSession.jsx'
+import MeetingWriteback from './components/MeetingWriteback.jsx'
 import LoginPage from './components/LoginPage.jsx'
 import RequestAccessPage from './components/RequestAccessPage.jsx'
 import { supabase, isMockMode, signOut, checkApproval, ADMIN_EMAIL } from './lib/supabase.js'
@@ -208,6 +209,7 @@ export default function App() {
             <Route path="/meetings" element={<MeetingsView />} />
             <Route path="/meetings/:id" element={<MeetingPack />} />
             <Route path="/meetings/:id/session" element={<MeetingSession />} />
+            <Route path="/meetings/:id/writeback" element={<MeetingWriteback />} />
             <Route path="/article/:articleId" element={<ArticleRoute savedArticles={savedArticles} onToggleSave={handleToggleSave} />} />
             <Route path="/privacy" element={<PrivacyPage />} />
             <Route path="/terms" element={<TermsPage />} />

@@ -204,3 +204,43 @@ export async function endSession(meetingId) {
   const { error } = await supabase.from('meetings').update({ status: 'complete' }).eq('id', meetingId)
   if (error) throw error
 }
+
+// ── Write-back helpers (Phase 3c) ──
+
+export async function getProposals(meetingId) {
+  if (isMockMode) return []
+  const { data, error } = await supabase
+    .from('writeback_proposals').select('*').eq('meeting_id', meetingId).order('kind').order('created_at')
+  if (error) throw error
+  return data
+}
+
+async function invokeWriteback(meetingId, mode) {
+  const { data, error } = await supabase.functions.invoke('writeback', { body: { meeting_id: meetingId, mode } })
+  if (error) throw error
+  if (data?.ok === false) throw new Error(data.error || 'writeback failed')
+  return data
+}
+
+export async function extractWriteback(meetingId) {
+  if (isMockMode) throw new Error('extractWriteback unavailable in mock mode')
+  return invokeWriteback(meetingId, 'extract')
+}
+
+export async function commitWriteback(meetingId) {
+  if (isMockMode) throw new Error('commitWriteback unavailable in mock mode')
+  return invokeWriteback(meetingId, 'commit')
+}
+
+export async function setProposalIncluded(id, included) {
+  if (isMockMode) return
+  const { error } = await supabase.from('writeback_proposals').update({ included }).eq('id', id)
+  if (error) throw error
+}
+
+export async function editProposal(id, { text, detail, domains }) {
+  if (isMockMode) return
+  const { error } = await supabase
+    .from('writeback_proposals').update({ text, detail, domains, edited: true }).eq('id', id)
+  if (error) throw error
+}
