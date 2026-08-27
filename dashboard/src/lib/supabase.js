@@ -261,17 +261,29 @@ export async function listEpisodes() {
 
 // ── Insight Graph helpers ──
 
+// Fetch all rows from a select in pages, so a >1000-row table isn't silently
+// truncated by PostgREST's default cap.
+async function fetchAllPaged(makeQuery, pageSize = 1000) {
+  const all = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await makeQuery().range(from, from + pageSize - 1)
+    if (error) throw error
+    all.push(...(data || []))
+    if (!data || data.length < pageSize) break
+  }
+  return all
+}
+
 // Fetch insights (+ source id-pairs) for the co-citation graph.
 export async function fetchInsightsForGraph(includeCandidates = false) {
   if (isMockMode) return { insights: [], sources: [] }
   const statuses = includeCandidates ? ['active', 'candidate'] : ['active']
-  const [insightsRes, sourcesRes] = await Promise.all([
+  const [insightsRes, sources] = await Promise.all([
     supabase.from('insights').select('id, text, domains, confidence, status').in('status', statuses),
-    supabase.from('insight_sources').select('insight_id, article_id'),
+    fetchAllPaged(() => supabase.from('insight_sources').select('insight_id, article_id')),
   ])
   if (insightsRes.error) throw insightsRes.error
-  if (sourcesRes.error) throw sourcesRes.error
-  return { insights: insightsRes.data || [], sources: sourcesRes.data || [] }
+  return { insights: insightsRes.data || [], sources }
 }
 
 // Fetch one insight's hydrated sources for the graph side panel.
