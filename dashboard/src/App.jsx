@@ -18,6 +18,7 @@ import { CATEGORIES } from './lib/mockData.js'
 import PrivacyPage from './components/PrivacyPage.jsx'
 import TermsPage from './components/TermsPage.jsx'
 import AdminView from './components/AdminView.jsx'
+import RecommendedView from './components/RecommendedView.jsx'
 
 const LS_KEY = 'ej_saved_article_ids'
 
@@ -206,6 +207,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/briefing" replace />} />
             <Route path="/briefing" element={<ScanView {...scanProps} selectedCategory={null} />} />
+            <Route path="/recommended" element={<RecommendedView {...scanProps} />} />
             <Route path="/podcast" element={<PodcastView />} />
             <Route path="/category/:categoryId" element={<CategoryRoute {...scanProps} />} />
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
