@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { CATEGORIES, ARTICLE_ANALYSES } from '../lib/mockData.js'
-import { supabase, isMockMode } from '../lib/supabase.js'
+import { supabase, isMockMode, logInteraction } from '../lib/supabase.js'
 import ChatPanel from './ChatPanel.jsx'
 
 export default function DiveView({ article, onBack, savedArticles, onToggleSave }) {
@@ -33,6 +33,10 @@ export default function DiveView({ article, onBack, savedArticles, onToggleSave 
       .maybeSingle()
       .then(({ data }) => { if (data?.notes) setNote(data.notes) })
   }, [article?.id, isSaved])
+
+  useEffect(() => {
+    if (article?.id) logInteraction(article.id, 'read_full')
+  }, [article?.id])
 
   async function handleNoteBlur() {
     if (!isSaved || isMockMode) return

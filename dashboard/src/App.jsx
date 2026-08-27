@@ -13,11 +13,12 @@ import MeetingSession from './components/MeetingSession.jsx'
 import MeetingWriteback from './components/MeetingWriteback.jsx'
 import LoginPage from './components/LoginPage.jsx'
 import RequestAccessPage from './components/RequestAccessPage.jsx'
-import { supabase, isMockMode, signOut, checkApproval, ADMIN_EMAIL } from './lib/supabase.js'
+import { supabase, isMockMode, signOut, checkApproval, ADMIN_EMAIL, logInteraction } from './lib/supabase.js'
 import { CATEGORIES } from './lib/mockData.js'
 import PrivacyPage from './components/PrivacyPage.jsx'
 import TermsPage from './components/TermsPage.jsx'
 import AdminView from './components/AdminView.jsx'
+import RecommendedView from './components/RecommendedView.jsx'
 
 const LS_KEY = 'ej_saved_article_ids'
 
@@ -110,6 +111,7 @@ export default function App() {
     if (!isMockMode) {
       if (isSaving) {
         await supabase.from('saved_articles').insert({ article_id: articleId })
+        logInteraction(articleId, 'saved')
       } else {
         await supabase.from('saved_articles').delete().eq('article_id', articleId)
       }
@@ -117,6 +119,7 @@ export default function App() {
   }
 
   function handleArticleClick(article) {
+    logInteraction(article.id, 'opened')
     navigate(`/article/${article.id}`, { state: { article } })
   }
 
@@ -204,6 +207,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/briefing" replace />} />
             <Route path="/briefing" element={<ScanView {...scanProps} selectedCategory={null} />} />
+            <Route path="/recommended" element={<RecommendedView {...scanProps} />} />
             <Route path="/podcast" element={<PodcastView />} />
             <Route path="/category/:categoryId" element={<CategoryRoute {...scanProps} />} />
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
