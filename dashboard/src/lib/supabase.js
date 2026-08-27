@@ -296,3 +296,40 @@ export async function fetchInsightSources(insightId) {
   if (error) throw error
   return data || []
 }
+
+// ── Recommendation inputs ──
+
+// Assemble the raw signals the recommender scores over.
+export async function fetchRecommendationInputs() {
+  if (isMockMode) {
+    return { candidates: [], interactions: [], savedCategoryIds: [], insightArticleIds: [], activeDomains: [] }
+  }
+  const [cRes, iRes, sRes, aRes] = await Promise.all([
+    supabase.from('articles')
+      .select('*, source:sources(name), category:categories(name,color)')
+      .order('impact_score', { ascending: false, nullsFirst: false })
+      .order('published_at', { ascending: false })
+      .limit(200),
+    supabase.from('user_interactions').select('action, article:articles(primary_category_id)'),
+    supabase.from('saved_articles').select('article:articles(primary_category_id)'),
+    supabase.from('insights').select('id, domains').eq('status', 'active'),
+  ])
+  for (const r of [cRes, iRes, sRes, aRes]) if (r.error) throw r.error
+
+  const activeInsights = aRes.data || []
+  const activeInsightIds = activeInsights.map((x) => x.id)
+  const activeDomains = [...new Set(activeInsights.flatMap((x) => x.domains || []))]
+
+  let insightArticleIds = []
+  if (activeInsightIds.length) {
+    const { data, error } = await supabase
+      .from('insight_sources').select('article_id').in('insight_id', activeInsightIds)
+    if (error) throw error
+    insightArticleIds = [...new Set((data || []).map((r) => r.article_id))]
+  }
+
+  const interactions = (iRes.data || []).map((r) => ({ action: r.action, category_id: r.article?.primary_category_id }))
+  const savedCategoryIds = (sRes.data || []).map((r) => r.article?.primary_category_id).filter(Boolean)
+
+  return { candidates: cRes.data || [], interactions, savedCategoryIds, insightArticleIds, activeDomains }
+}
