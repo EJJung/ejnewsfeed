@@ -258,3 +258,29 @@ export async function listEpisodes() {
   if (error) throw error
   return data
 }
+
+// ── Insight Graph helpers ──
+
+// Fetch insights (+ source id-pairs) for the co-citation graph.
+export async function fetchInsightsForGraph(includeCandidates = false) {
+  if (isMockMode) return { insights: [], sources: [] }
+  const statuses = includeCandidates ? ['active', 'candidate'] : ['active']
+  const [insightsRes, sourcesRes] = await Promise.all([
+    supabase.from('insights').select('id, text, domains, confidence, status').in('status', statuses),
+    supabase.from('insight_sources').select('insight_id, article_id'),
+  ])
+  if (insightsRes.error) throw insightsRes.error
+  if (sourcesRes.error) throw sourcesRes.error
+  return { insights: insightsRes.data || [], sources: sourcesRes.data || [] }
+}
+
+// Fetch one insight's hydrated sources for the graph side panel.
+export async function fetchInsightSources(insightId) {
+  if (isMockMode) return []
+  const { data, error } = await supabase
+    .from('insight_sources')
+    .select('relation, article:articles(id, title, url, snippet, source:sources(name))')
+    .eq('insight_id', insightId)
+  if (error) throw error
+  return data || []
+}
