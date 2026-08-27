@@ -19,3 +19,36 @@ export function formatDuration(seconds) {
   if (seconds < 60) return '<1 min'
   return `${Math.round(seconds / 60)} min`
 }
+
+// The episodes.script column has two shapes: daily episodes store plain
+// text, weekly episodes store JSON.stringify(turns) where turns is
+// [{ speaker, text }, ...]. This returns a readable transcript string for
+// either shape, never throwing.
+export function transcriptText(episode) {
+  const script = episode.script
+  if (script == null) return ''
+
+  if (episode.kind === 'weekly') {
+    try {
+      const parsed = JSON.parse(script)
+      const isTurns =
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every(
+          turn =>
+            turn &&
+            typeof turn === 'object' &&
+            'speaker' in turn &&
+            'text' in turn
+        )
+      if (isTurns) {
+        return parsed.map(({ speaker, text }) => `${speaker}: ${text}`).join('\n\n')
+      }
+      return script
+    } catch {
+      return script
+    }
+  }
+
+  return script
+}

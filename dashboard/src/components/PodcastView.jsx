@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { listEpisodes } from '../lib/supabase.js'
-import { splitByKind, formatDuration } from '../lib/episodes.js'
+import { splitByKind, formatDuration, transcriptText } from '../lib/episodes.js'
 
 export default function PodcastView() {
   const [episodes, setEpisodes] = useState([])
@@ -115,7 +115,7 @@ function EpisodeCard({ episode, isPlaying, onPlay }) {
           <audio controls autoPlay src={episode.audio_url} className="w-full h-10">
             Your browser does not support the audio element.
           </audio>
-        ) : (
+        ) : episode.audio_url ? (
           <button
             onClick={onPlay}
             className="flex items-center gap-2 text-sm text-gray-700 border border-gray-200 rounded-md px-3 py-1.5 hover:bg-gray-50 transition-colors"
@@ -125,6 +125,13 @@ function EpisodeCard({ episode, isPlaying, onPlay }) {
             </svg>
             Play
           </button>
+        ) : (
+          <span className="flex items-center gap-2 text-sm text-gray-400 border border-gray-100 rounded-md px-3 py-1.5">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Audio unavailable
+          </span>
         )}
       </div>
 
@@ -139,7 +146,7 @@ function EpisodeCard({ episode, isPlaying, onPlay }) {
         </button>
         {showTranscript && (
           <p className="text-xs text-gray-500 mt-2 whitespace-pre-wrap leading-relaxed">
-            {episode.script}
+            {transcriptText(episode)}
           </p>
         )}
       </div>

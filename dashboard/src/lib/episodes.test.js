@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitByKind, formatDuration } from './episodes.js'
+import { splitByKind, formatDuration, transcriptText } from './episodes.js'
 
 describe('splitByKind', () => {
   it('partitions weekly and daily, preserving order', () => {
@@ -38,5 +38,36 @@ describe('formatDuration', () => {
   it('rounds to whole minutes', () => {
     expect(formatDuration(899)).toBe('15 min')
     expect(formatDuration(741)).toBe('12 min')
+  })
+})
+
+describe('transcriptText', () => {
+  it('joins weekly turns JSON into readable dialogue', () => {
+    const script = JSON.stringify([
+      { speaker: 'A', text: 'first' },
+      { speaker: 'B', text: 'second' },
+    ])
+    expect(transcriptText({ kind: 'weekly', script })).toBe('A: first\n\nB: second')
+  })
+
+  it('falls back to the raw string when weekly JSON is malformed', () => {
+    expect(transcriptText({ kind: 'weekly', script: '{not json' })).toBe('{not json')
+  })
+
+  it('falls back to the raw string when weekly JSON parses but is not turns shape (object)', () => {
+    expect(transcriptText({ kind: 'weekly', script: '{"foo":1}' })).toBe('{"foo":1}')
+  })
+
+  it('falls back to the raw string when weekly JSON parses but is not turns shape (array of non-turns)', () => {
+    expect(transcriptText({ kind: 'weekly', script: '[1,2]' })).toBe('[1,2]')
+  })
+
+  it('returns the plain script unchanged for daily episodes', () => {
+    expect(transcriptText({ kind: 'daily', script: 'Just plain text.' })).toBe('Just plain text.')
+  })
+
+  it('returns an empty string when script is null or undefined', () => {
+    expect(transcriptText({ kind: 'daily', script: null })).toBe('')
+    expect(transcriptText({ kind: 'weekly', script: undefined })).toBe('')
   })
 })
