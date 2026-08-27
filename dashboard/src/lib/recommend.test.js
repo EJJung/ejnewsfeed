@@ -57,4 +57,33 @@ describe('scoreArticles', () => {
     const out = scoreArticles([base('x', { impact_score: 0.1 }), base('y', { impact_score: 0.9 })], { now })
     expect(out.map(r => r.article.id)).toEqual(['y', 'x'])
   })
+
+  it('catBoost ranks a matching-category article higher', () => {
+    const out = scoreArticles(
+      [base('x', { category: { name: 'AI' } }), base('y', { category: { name: 'Business' } })],
+      { activeCategoryNames: new Set(['AI']), now },
+    )
+    expect(out[0].article.id).toBe('x')
+  })
+
+  it('reason "Matches your X reading" when high affinity for category, no other boosts', () => {
+    const out = scoreArticles([base('x', { primary_category_id: 'a', category: { name: 'AI' } })], { affinity: { a: 10 }, now })
+    expect(out[0].reason).toBe('Matches your AI reading')
+  })
+
+  it('reason "High impact" when impact >= 0.6, no boosts', () => {
+    const out = scoreArticles([base('x', { impact_score: 0.8 })], { now })
+    expect(out[0].reason).toBe('High impact')
+  })
+
+  it('reason "Recent" when low impact, no boosts, recent date', () => {
+    const out = scoreArticles([base('x', { impact_score: 0.2 })], { now })
+    expect(out[0].reason).toBe('Recent')
+  })
+
+  it('accepts array inputs for insightArticleIds and savedIds', () => {
+    const out = scoreArticles([base('x'), base('y')], { insightArticleIds: ['y'], savedIds: ['x'], now })
+    expect(out.map(r => r.article.id)).toEqual(['y'])
+    expect(out[0].reason).toBe('Sources an active insight')
+  })
 })
