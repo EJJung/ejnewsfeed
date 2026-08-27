@@ -28,6 +28,10 @@ export default function InsightGraphView({ categories = [] }) {
   }, [includeCandidates])
 
   useEffect(() => {
+    setSelected(null)
+  }, [domainId])
+
+  useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const update = () => setDims({ width: el.clientWidth, height: el.clientHeight })
@@ -210,7 +214,7 @@ function SidePanel({ node, sources, loading, domainLabels, onClose }) {
                 {article.source?.name && <span className="text-gray-300"> — {article.source.name}</span>}
               </li>
             ))}
-            {(sources || []).length === 0 && <li className="text-xs text-gray-300">No sources.</li>}
+            {(sources || []).filter((s) => s.article).length === 0 && <li className="text-xs text-gray-300">No sources.</li>}
           </ul>
         )}
       </div>
