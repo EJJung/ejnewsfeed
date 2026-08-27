@@ -5,6 +5,7 @@ import ScanView from './components/ScanView.jsx'
 import DiveView from './components/DiveView.jsx'
 import TrendsView from './components/TrendsView.jsx'
 import KnowledgeView from './components/KnowledgeView.jsx'
+import InsightGraphView from './components/InsightGraphView.jsx'
 import PodcastView from './components/PodcastView.jsx'
 import MeetingsView from './components/MeetingsView.jsx'
 import MeetingPack from './components/MeetingPack.jsx'
@@ -208,6 +209,7 @@ export default function App() {
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
             <Route path="/trends" element={<TrendsView categories={categories} />} />
             <Route path="/knowledge" element={<KnowledgeView categories={categories} />} />
+            <Route path="/graph" element={<InsightGraphView categories={categories} />} />
             <Route path="/meetings" element={<MeetingsView />} />
             <Route path="/meetings/:id" element={<MeetingPack />} />
             <Route path="/meetings/:id/session" element={<MeetingSession />} />
