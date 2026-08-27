@@ -244,3 +244,17 @@ export async function editProposal(id, { text, detail, domains }) {
     .from('writeback_proposals').update({ text, detail, domains, edited: true }).eq('id', id)
   if (error) throw error
 }
+
+// ── Podcast helpers ──
+
+// Fetch ready podcast episodes, newest first (Podcast view).
+export async function listEpisodes() {
+  if (isMockMode) return []
+  const { data, error } = await supabase
+    .from('episodes')
+    .select('id, kind, title, script, duration_seconds, published_at, audio_url')
+    .eq('status', 'ready')
+    .order('published_at', { ascending: false })
+  if (error) throw error
+  return data
+}

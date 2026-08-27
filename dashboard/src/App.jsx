@@ -5,6 +5,7 @@ import ScanView from './components/ScanView.jsx'
 import DiveView from './components/DiveView.jsx'
 import TrendsView from './components/TrendsView.jsx'
 import KnowledgeView from './components/KnowledgeView.jsx'
+import PodcastView from './components/PodcastView.jsx'
 import MeetingsView from './components/MeetingsView.jsx'
 import MeetingPack from './components/MeetingPack.jsx'
 import MeetingSession from './components/MeetingSession.jsx'
@@ -202,6 +203,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/briefing" replace />} />
             <Route path="/briefing" element={<ScanView {...scanProps} selectedCategory={null} />} />
+            <Route path="/podcast" element={<PodcastView />} />
             <Route path="/category/:categoryId" element={<CategoryRoute {...scanProps} />} />
             <Route path="/saved" element={<ScanView {...scanProps} selectedCategory="saved" />} />
             <Route path="/trends" element={<TrendsView categories={categories} />} />
