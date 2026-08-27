@@ -322,10 +322,9 @@ export async function fetchRecommendationInputs() {
 
   let insightArticleIds = []
   if (activeInsightIds.length) {
-    const { data, error } = await supabase
-      .from('insight_sources').select('article_id').in('insight_id', activeInsightIds)
-    if (error) throw error
-    insightArticleIds = [...new Set((data || []).map((r) => r.article_id))]
+    const rows = await fetchAllPaged(() =>
+      supabase.from('insight_sources').select('article_id').in('insight_id', activeInsightIds))
+    insightArticleIds = [...new Set(rows.map((r) => r.article_id))]
   }
 
   const interactions = (iRes.data || []).map((r) => ({ action: r.action, category_id: r.article?.primary_category_id }))
