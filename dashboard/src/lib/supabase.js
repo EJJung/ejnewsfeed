@@ -331,5 +331,6 @@ export async function fetchRecommendationInputs() {
   const interactions = (iRes.data || []).map((r) => ({ action: r.action, category_id: r.article?.primary_category_id }))
   const savedCategoryIds = (sRes.data || []).map((r) => r.article?.primary_category_id).filter(Boolean)
 
-  return { candidates: cRes.data || [], interactions, savedCategoryIds, insightArticleIds, activeDomains }
+  const candidates = (cRes.data || []).map((a) => ({ ...a, source: a.source?.name || a.source }))
+  return { candidates, interactions, savedCategoryIds, insightArticleIds, activeDomains }
 }
