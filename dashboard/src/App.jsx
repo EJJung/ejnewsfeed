@@ -203,7 +203,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="mobile-content overflow-hidden">
+        <div className="mobile-content flex flex-col overflow-hidden">
           <Routes>
             <Route path="/" element={<Navigate to="/briefing" replace />} />
             <Route path="/briefing" element={<ScanView {...scanProps} selectedCategory={null} />} />

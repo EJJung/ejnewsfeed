@@ -49,7 +49,8 @@ export default function MeetingPack() {
   const assembling = meeting.status === 'assembling'
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8">
+    <div className="flex-1 overflow-y-auto">
+      <div className="max-w-3xl mx-auto px-6 py-8">
       <button onClick={() => navigate('/meetings')} className="text-sm text-gray-500 hover:underline mb-4">← Meetings</button>
 
       <h1 className="text-2xl font-semibold text-gray-900">{meeting.title}</h1>
@@ -119,6 +120,7 @@ export default function MeetingPack() {
       })}
 
       <AddCard meetingId={id} onAdded={refresh} />
+      </div>
     </div>
   )
 }
