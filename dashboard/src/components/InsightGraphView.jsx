@@ -112,7 +112,7 @@ export default function InsightGraphView({ categories = [] }) {
 
       {/* Graph + side panel */}
       <div className="flex-1 flex min-h-0">
-        <div ref={containerRef} className="flex-1 relative min-h-0">
+        <div ref={containerRef} className="flex-1 relative min-h-0 min-w-0">
           {isLoading ? (
             <Centered><span className="text-sm text-gray-400">Loading graph…</span></Centered>
           ) : error ? (
