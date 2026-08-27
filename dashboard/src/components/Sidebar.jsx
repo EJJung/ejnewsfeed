@@ -14,6 +14,7 @@ export default function Sidebar({ categories = [], savedCount, onClose, isAdmin 
 
   function handleNav(key) {
     if (key === 'briefing') navigate('/briefing')
+    else if (key === 'podcast') navigate('/podcast')
     else if (key === 'saved') navigate('/saved')
     else if (key === 'trends') navigate('/trends')
     else if (key === 'knowledge') navigate('/knowledge')
@@ -56,6 +57,17 @@ export default function Sidebar({ categories = [], savedCount, onClose, isAdmin 
           icon={
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+            </svg>
+          }
+        />
+
+        <NavItem
+          label="Podcast"
+          isActive={activeNav === 'podcast'}
+          onClick={() => handleNav('podcast')}
+          icon={
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-14 0m7 7v3m-4 0h8m-4-6a3 3 0 01-3-3V5a3 3 0 116 0v4a3 3 0 01-3 3z" />
             </svg>
           }
         />
