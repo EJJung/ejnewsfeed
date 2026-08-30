@@ -33,6 +33,15 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
+// Day-of-year (1–366) from a 'YYYY-MM-DD' string, computed purely from the
+// date parts in UTC — no Date parsing of the string, no leap-year special-case
+// (Date.UTC handles it). Used to alternate the daily brief's voice by parity.
+function dayOfYear(isoDate: string): number {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  const msPerDay = 86_400_000
+  return Math.floor((Date.UTC(year, month - 1, day) - Date.UTC(year, 0, 0)) / msPerDay)
+}
+
 // Domain slugs (generic, used by insights.domains) map to this project's
 // existing categories.name values (see pipeline/audit_pipeline.py CATEGORIES).
 // Duplicated from distill-insights/index.ts's own local copy — each edge
@@ -86,7 +95,9 @@ Deno.serve(async (req) => {
   )
   const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')!
   const elevenLabsKey = Deno.env.get('ELEVENLABS_API_KEY')!
+  // Daily brief alternates voice by day-of-year parity: even → primary, odd → alt.
   const voiceId = Deno.env.get('ELEVENLABS_VOICE_ID') || 'pNInz6obpgDQGcFmaJgB'
+  const voiceIdAlt = Deno.env.get('ELEVENLABS_VOICE_ID_ALT') || 's3TPKV1kjDlVtZbl4Ksh'
   const voiceIdA = Deno.env.get('ELEVENLABS_VOICE_ID_A') || 'ErXwobaYiN019PkySvjV'
   const voiceIdB = Deno.env.get('ELEVENLABS_VOICE_ID_B') || '21m00Tcm4TlvDq8ikWAM'
 
@@ -99,7 +110,7 @@ Deno.serve(async (req) => {
 
   const work = (mode === 'weekly'
     ? generateWeeklyEpisode(supabase, anthropicKey, elevenLabsKey, { A: voiceIdA, B: voiceIdB })
-    : generateDailyEpisode(supabase, anthropicKey, elevenLabsKey, voiceId)
+    : generateDailyEpisode(supabase, anthropicKey, elevenLabsKey, { primary: voiceId, alt: voiceIdAlt })
   )
     .then(async (result) => {
       if (runId) {
@@ -144,9 +155,12 @@ async function generateDailyEpisode(
   supabase: ReturnType<typeof createClient>,
   anthropicKey: string,
   elevenLabsKey: string,
-  voiceId: string,
+  voices: { primary: string; alt: string },
 ) {
   const todayISO = new Date().toISOString().slice(0, 10)
+
+  // Alternate voice day-to-day: even day-of-year → primary, odd → alt.
+  const voiceId = dayOfYear(todayISO) % 2 === 0 ? voices.primary : voices.alt
 
   const { data: categories, error: catErr } = await supabase.from('categories').select('id, name')
   if (catErr || !categories?.length) throw new Error(`Failed to load categories: ${catErr?.message ?? 'empty'}`)
@@ -231,7 +245,7 @@ async function generateDailyEpisode(
       .eq('id', episodeId)
     if (updateErr) throw new Error(`Failed to finalize episode row: ${updateErr.message}`)
 
-    return { episode_id: episodeId, word_count: wordCount, duration_seconds: durationSeconds }
+    return { episode_id: episodeId, word_count: wordCount, duration_seconds: durationSeconds, voice_id: voiceId }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     await supabase.from('episodes').update({ status: 'error', error_message: msg }).eq('id', episodeId)
